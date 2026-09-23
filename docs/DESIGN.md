@@ -91,6 +91,14 @@ void Effect::paintScreen(const RenderTarget &, const RenderViewport &,
 - **插件 id 由文件名决定**（KDE 会警告 metadata 中显式写 `Id`）：文件必须是 `trail.so` 而不是 `libtrail.so`
   （故 `set_target_properties(trail PROPERTIES PREFIX "")`），kwinrc 开关为 `[Plugins] trailEnabled=true`。
 - ABI：头文件里明确写了 effect 插件必须与 KWin 同版本编译（本机 KWin 6.7.5 ↔ kwin-devel 6.7.5）。
+  实际保护机制是**插件工厂 IID 里带完整版本号**：
+  `EffectPluginFactory_iid = "org.kde.kwin.EffectPluginFactory" KWIN_PLUGIN_VERSION_STRING`
+  （`config-kwin.h` → `"6.7.5"`）。`PluginEffectLoader::factory()` 先读元数据比对 IID，
+  不匹配就 `qCDebug` 一行并返回 `nullptr`，**不会调用 `loader.instance()`**，因此插件工厂与
+  `createEffect()` 都不会执行。实测把 IID 改成 6.7.4 后：KWin 记录
+  `has not matching plugin version` + `Couldn't get an EffectPluginFactory`，其余效果照常加载，
+  合成器不崩溃。注意该日志是 `qCDebug(KWIN_CORE)`，默认不可见；且**元数据层面的发现与版本无关**，
+  所以插件仍会出现在效果列表里，只是 `isEffectSupported()` 为 false（列出来但不可勾选）。
 - `kcoreaddons_add_plugin` 安装到 `${KDE_INSTALL_PLUGINDIR}/kwin/effects/plugins`。ECM 只有在
   安装前缀等于 Qt 前缀时才会用 `qt6` 子目录；用户前缀下必须显式指定
   `KDE_INSTALL_PLUGINDIR=${KDE_INSTALL_LIBDIR}/qt6/plugins`，才能落到

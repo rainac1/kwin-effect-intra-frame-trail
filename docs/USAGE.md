@@ -58,6 +58,46 @@ KWin 启动时会用 `KPluginMetaData::findPlugins("kwin/effects/plugins")` 在 
 **插件 id 由文件名决定**（不是元数据里的字段）：文件叫 `trail.so`，所以 kwinrc 里的开关是
 `[Plugins] trailEnabled=true`。这也是本项目必须装成 `trail.so` 而不是 `libtrail.so` 的原因。
 
+### 版本不匹配时会怎样（不会崩）
+
+KWin 的 effect 工厂 IID 里**带着 KWin 的完整版本号**（`config-kwin.h` 定义）：
+
+```
+EffectPluginFactory_iid = "org.kde.kwin.EffectPluginFactory" + KWIN_PLUGIN_VERSION_STRING
+                       = "org.kde.kwin.EffectPluginFactory6.7.5"
+```
+
+`PluginEffectLoader::factory()` 在读插件元数据后、**实例化插件之前**就比对它：
+
+```cpp
+QPluginLoader loader(info.fileName());
+if (loader.metaData().value("IID").toString() != EffectPluginFactory_iid) {
+    qCDebug(KWIN_CORE) << info.pluginId() << " has not matching plugin version, ...";
+    return nullptr;          // ← 到此为止，不会调用 loader.instance()
+}
+factory = qobject_cast<KPluginFactory *>(loader.instance());
+```
+
+我在嵌套会话里把插件的 IID **二进制改写**成 `6.7.4`（等价于"KWin 升级了、插件没重编译"），
+实测 KWin 6.7.5 的输出：
+
+```
+kwin_core: "trail"  has not matching plugin version, expected  org.kde.kwin.EffectPluginFactory6.7.5 got  "org.kde.kwin.EffectPluginFactory6.7.4"
+kwin_core: Couldn't get an EffectPluginFactory for:  "trail"
+```
+
+结论：
+
+- **不会崩溃**。KWin 只打一行调试日志就跳过这个插件，其它效果照常加载，合成器继续运行。
+- 效果**仍会出现在桌面效果列表里**（因为是靠元数据发现的，元数据与版本无关），但
+  `isEffectSupported` 返回 `false`，也就是**列出来但不可勾选**。
+- 这些都只是 `qCDebug`：**默认日志级别下完全看不到**。所以升级 KWin 后的典型表现是
+  "效果悄悄不见了/变灰了"，而不是报错弹窗。
+- 反过来，**如果版本号相同但 ABI 实际不兼容**（例如有人手工改造过 KWin），这道检查会通过，
+  插件就会被真正实例化 —— 那种情况下有可能崩溃。KWin effect 运行在合成器进程内、没有沙箱，
+  所以"同名版本的不兼容构建"和"插件自身 bug"都可能导致整个桌面崩溃。这正是本项目
+  坚持先在**嵌套会话**里测试的原因（见 §8）。
+
 ---
 
 ## 3. 前置条件
@@ -239,7 +279,7 @@ WAYLAND_DISPLAY=wayland-dev QT_PLUGIN_PATH="$HOME/.local/lib64/qt6/plugins" dolp
 | --- | --- | --- |
 | 桌面效果里搜不到 "Pointer Trail"；`isEffectSupported trail` = false | KWin 的插件搜索路径里没有 `~/.local/lib64/qt6/plugins` | `helpers/install-session-env.sh` 后**注销重登** |
 | `isEffectSupported` = true 但勾选后没反应 | `[Effect-trail] Enabled=false`，或 `isSupported()` 判定当前不是 OpenGL 合成 | 检查 kwinrc；确认没在用软件合成 (`KWIN_COMPOSE=Q`? 一般不用管) |
-| 日志出现 "Couldn't create effect" / 符号找不到 | 插件与 KWin **版本不一致**（升级 KWin 后没重新编译） | 重新 `helpers/build.sh`；确认 kwin-devel 版本与 `kwin_wayland --version` 一致 |
+| 桌面效果里能看到但**无法勾选**（灰掉）；`isEffectSupported trail` = false；日志有 `has not matching plugin version` | KWin 升级过，插件是旧版本编译的（IID 版本号不匹配） | 重新 `helpers/build.sh` 即可；不会崩溃，见 §2 |
 | 日志里完全没有 `kwin_effect_trail` | 插件没被加载（未启用 / 未发现） | 回到 §5 步骤 1、2 |
 | **截图里看不到轨迹** | KWin 的截图与录屏**绕过 effect 链**（直接渲染场景） | 这是 KWin 设计如此，不是 bug。自动化验证用 `TRAIL_KWIN_SELFCHECK=1` |
 | 甩鼠标时指针反而变大 | 这是内建的"晃动指针放大"效果 | 关掉它：`kwriteconfig6 --file kwinrc --group Plugins --key shakecursorEnabled false` |
