@@ -59,6 +59,10 @@ for libdir in lib64 lib; do
     fi
 done
 echo
-echo "enable it with:"
-echo "  helpers/enable-effect.sh enable   # for the current user's session"
-echo "  helpers/nested-e2e.sh             # isolated nested compositor + screenshot"
+echo "next steps:"
+echo "  helpers/install-session-env.sh    # once: let KWin find plugins in ~/.local,"
+echo "                                    # then log out and back in"
+echo "  helpers/enable-effect.sh enable   # enable in the current session"
+echo "  helpers/nested-e2e.sh             # or test now in an isolated nested compositor"
+echo
+echo "details: docs/USAGE.md"

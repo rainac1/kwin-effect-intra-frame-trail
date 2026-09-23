@@ -27,12 +27,21 @@
 # 1) 构建 + 单元测试 + 安装到 ~/.local
 helpers/build.sh
 
-# 2) 启用（写入你自己的 kwinrc）
+# 2) 让正在运行的 KWin 能找到用户目录里的插件，然后【注销并重新登录】
+helpers/install-session-env.sh
+
+# 3) 启用（也可在 系统设置 → 窗口管理 → 桌面效果 里勾选 "Pointer Trail"）
 helpers/enable-effect.sh enable
 
-# 或者：在隔离的嵌套合成器里直接端到端测试（推荐，不触碰当前会话）
+# 或者：在隔离的嵌套合成器里直接端到端测试（无需重新登录，不触碰当前会话）
 helpers/nested-e2e.sh
 ```
+
+> **为什么需要第 2 步**：KWin 通过 Qt 的插件搜索路径查找二进制 effect，而 Qt 默认只搜索
+> 系统目录（`/usr/lib64/qt6/plugins`），**不包含** `~/.local`。这一步会写入
+> `~/.config/environment.d/50-kwin-trail.conf`。细节见 [`docs/USAGE.md`](docs/USAGE.md)。
+>
+> 不确定插件有没有被 KWin 认出来？`helpers/enable-effect.sh status` 会直接问运行中的 KWin。
 
 没有系统级 `kwin-devel` / `qt6-qtbase-devel` 时（无 root、容器、CI 等），
 `helpers/build.sh` 会自动使用本地 sysroot；首次需先准备：
@@ -71,7 +80,9 @@ tools/fake-input-injector.cpp    测试用指针注入器（org_kde_kwin_fake_in
 helpers/build.sh           配置/构建/测试/安装
 helpers/run-nested.sh      启动隔离的嵌套 KWin 会话
 helpers/nested-e2e.sh      端到端测试：注入指针路径 + 像素级自检
-helpers/enable-effect.sh   在用户会话中启用/停用
+helpers/enable-effect.sh   在用户会话中启用/停用，并用 D-Bus 查询真实状态
+helpers/install-session-env.sh  让 KWin 能找到用户目录里的插件（需重新登录）
+docs/USAGE.md              面向新手的详细使用说明（概念、启用、排查）
 docs/DESIGN.md             设计方案与调研结论
 ```
 
