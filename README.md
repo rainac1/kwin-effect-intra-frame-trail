@@ -105,13 +105,27 @@ QT_LOGGING_RULES="kwin_effect_trail.debug=true" CLIENT=konsole helpers/run-neste
 
 `TRAIL_KWIN_SELFCHECK=1` 开启像素级自检（绘制前后 `glReadPixels` 比较）。
 
-## 两个容易踩的坑
+## 三个容易踩的坑
 
 1. **截图/录屏看不到本 effect 的覆盖层**。KWin 的 screenshot 与 screencast 直接渲染场景
    （`sceneView.paint()`），绕过 effect 链。这是设计如此，不是本项目的 bug；
    自动化验证请用 `TRAIL_KWIN_SELFCHECK=1`。
 2. **晃动指针放大（Shake Cursor）会干扰测试**。它默认启用，而测试注入器正是快速来回移动指针。
    `helpers/run-nested.sh` 已在测试配置里写 `shakecursorEnabled=false`。
+3. **手工启动嵌套 KWin 时必须隔离 `XDG_CONFIG_HOME`**（以及用 `dbus-run-session` 隔离总线）。
+   否则嵌套实例会改写你**真实的** `~/.config/kwinrc` 与 `~/.config/kglobalshortcutsrc`，
+   并且可能导致宿主 KWin 的全局快捷键组件（`/component/kwin`）变成 `isActive=false`，
+   症状是 **Meta+D、Alt+Tab 等 KWin 快捷键全部无响应**（该状态是运行期的，没有配置项可修，
+   只能重新登录或重启合成器恢复）。检查方法：
+
+   ```bash
+   # true = 正常；false = 该组件的快捷键不会触发
+   gdbus call --session --dest org.kde.kglobalaccel --object-path /component/kwin \
+       --method org.kde.kglobalaccel.Component.isActive
+   ```
+
+   `helpers/run-nested.sh` 已经隔离了 `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` 并走
+   `dbus-run-session`，所以用它做测试不会影响当前会话。
 
 ## 安全须知
 
