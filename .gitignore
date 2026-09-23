@@ -1,0 +1,11 @@
+# Build trees
+/build/
+/build-*/
+
+# Local development sysroot and downloaded tooling (see tools/)
+/.sysroot/
+/.tools/
+
+# Local install prefix and nested test session state (see helpers/)
+/.local/
+/.runtime/
