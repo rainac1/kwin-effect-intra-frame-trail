@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # run-nested.sh -- run an isolated, nested KWin session to test the effect.
 #
@@ -38,8 +40,8 @@ cat > "$CONFIG_HOME/kwinrc" <<EOF
 [Plugins]
 trailEnabled=true
 # Shake Cursor magnifies the pointer when it is moved quickly back and forth,
-# which is exactly what the test injector does; the magnified pointer would
-# obscure the trail being inspected. It is on by default, so switch it off here.
+# which is exactly what one does when looking at the trail; the magnified
+# pointer would obscure it. It is on by default, so switch it off here.
 shakecursorEnabled=false
 
 [Effect-trail]

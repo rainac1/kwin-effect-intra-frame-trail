@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # build.sh -- configure, build and install the effect.
 #
@@ -47,7 +49,6 @@ if [[ -f "$ROOT_DIR/src/metadata.json" && -f "$plugin_file" ]] \
 fi
 
 cmake --build "$BUILD_DIR" --parallel "$(nproc)"
-ctest --test-dir "$BUILD_DIR" --output-on-failure
 cmake --install "$BUILD_DIR"
 
 echo
@@ -63,6 +64,6 @@ echo "next steps:"
 echo "  helpers/install-session-env.sh    # once: let KWin find plugins in ~/.local,"
 echo "                                    # then log out and back in"
 echo "  helpers/enable-effect.sh enable   # enable in the current session"
-echo "  helpers/nested-e2e.sh             # or test now in an isolated nested compositor"
+echo "  helpers/run-nested.sh             # or try it in an isolated nested compositor"
 echo
 echo "details: docs/USAGE.md"

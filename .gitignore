@@ -2,10 +2,10 @@
 /build/
 /build-*/
 
-# Local development sysroot and downloaded tooling (see tools/)
+# Local development sysroot and scratch checkouts
 /.sysroot/
 /.tools/
 
-# Local install prefix and nested test session state (see helpers/)
+# Local install prefix and nested session state (see helpers/run-nested.sh)
 /.local/
 /.runtime/

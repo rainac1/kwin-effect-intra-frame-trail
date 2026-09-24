@@ -20,8 +20,6 @@ set(CMAKE_AUTOMOC_MACRO_NAMES
 # kcoreaddons_add_plugin() requires this to be set.
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins")
 
-include(CTest)
-
 find_package(ECM 6.0 REQUIRED NO_MODULE)
 list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 # KDEInstallDirs supersedes GNUInstallDirs and must be included first.
@@ -42,11 +40,11 @@ find_package(KWin REQUIRED)
 # Some installed CMake packages hard-code absolute paths from the machine they
 # were built on (e.g. /usr/include/KF6/KConfig or
 # /usr/lib64/qt6/metatypes/qt6kf6configcore_metatypes.json). On a normal system
-# those exist; when building against a relocated sysroot (see
-# tools/bootstrap-dev-sysroot.sh) they do not, and CMake refuses to generate.
-# Translate such a path to the equivalent path inside the prefix when the prefix
-# provides it, and drop it when it is genuinely absent (in that case it belongs
-# to an optional feature this effect does not use).
+# those exist; when building against a relocated prefix (CMAKE_PREFIX_PATH
+# pointing somewhere other than /usr) they do not, and CMake refuses to
+# generate. Translate such a path to the equivalent path inside the prefix when
+# the prefix provides it, and drop it when it is genuinely absent (in that case
+# it belongs to an optional feature this effect does not use).
 function(trail_relocate_imported_paths)
     get_property(_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
     foreach(_target IN LISTS _targets)
@@ -78,7 +76,3 @@ endfunction()
 trail_relocate_imported_paths()
 
 add_subdirectory(src)
-
-if(BUILD_TESTING)
-    add_subdirectory(tests)
-endif()

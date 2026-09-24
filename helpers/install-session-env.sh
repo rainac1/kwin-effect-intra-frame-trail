@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # install-session-env.sh -- make the user-local KWin effect plugin discoverable.
 #
@@ -96,5 +98,5 @@ Next steps:
               (or System Settings > Window Management > Desktop Effects)
 
 To use the effect right now without re-logging in, run it in a nested session:
-  helpers/nested-e2e.sh
+  helpers/run-nested.sh
 EOF

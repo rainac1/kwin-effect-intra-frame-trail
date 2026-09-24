@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # enable-effect.sh -- switch the effect on or off for the current user, and
 # report whether the running KWin can actually see it.
 #
 # This edits the user's own kwinrc ([Plugins] trailEnabled), so it affects the
-# running desktop session, not a nested test session. Use helpers/run-nested.sh
-# or helpers/nested-e2e.sh if you want an isolated environment instead.
+# running desktop session. Use helpers/run-nested.sh if you want an isolated
+# environment instead.
 #
 # Usage: helpers/enable-effect.sh [enable|disable|status]
 #
