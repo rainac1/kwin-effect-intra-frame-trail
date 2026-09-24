@@ -20,6 +20,7 @@
 namespace KWin
 {
 
+class CursorSource;
 class GLTexture;
 
 /**
@@ -70,12 +71,34 @@ private:
         Region previousDamage;
         /** Timestamp of the previous paint pass for this output. */
         Trail::TimeUs lastPaint = 0;
+        /** Start of the sampling window used by the last collected frame. */
+        Trail::TimeUs lastCollect = 0;
         /** Smoothed interval between two paint passes for this output. */
         Trail::TimeUs interval = 0;
     };
 
-    /** Refresh the cached cursor texture and its logical geometry. */
-    void updateCursorShape();
+    /**
+     * What the cached texture and m_cursorShape were built from.
+     *
+     * These are the cheap properties of the cursor; comparing them every frame
+     * is what lets the effect notice a changed cursor without fetching its
+     * image, which is expensive when a client provides the cursor contents.
+     */
+    struct CursorImageState
+    {
+        const CursorSource *source = nullptr;
+        QSizeF size;
+        QPointF hotspot;
+    };
+
+    /** True when the pointer's own cursor changed shape or geometry. */
+    bool cursorGeometryChanged() const;
+
+    /** Fetch the cursor image and rebuild the cached shape and texture. */
+    void refreshCursorShape();
+
+    /** True when this frame can actually collect and paint cursor samples. */
+    bool canDraw() const;
 
     /** Emit a periodic summary of the rendering work, for diagnostics. */
     void reportFrameStats(std::size_t cursorCount);
@@ -95,6 +118,13 @@ private:
     std::unique_ptr<GLTexture> m_cursorTexture;
     qint64 m_cursorImageKey = 0;
     Trail::CursorShape m_cursorShape;
+    CursorImageState m_cursorImageState;
+    /**
+     * Set when the compositor reports new cursor contents. Together with
+     * cursorGeometryChanged() this keeps the cached image up to date without
+     * fetching it on every frame.
+     */
+    bool m_cursorDirty = true;
 
     /** Timestamp of the most recent sample, used for direct scanout decisions. */
     Trail::TimeUs m_lastSampleUs = 0;

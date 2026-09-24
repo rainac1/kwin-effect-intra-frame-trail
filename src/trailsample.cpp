@@ -88,4 +88,13 @@ QRectF cursorRect(const Sample &sample, const CursorShape &shape)
     return QRectF(topLeft, shape.size);
 }
 
+TimeUs samplingWindowStart(TimeUs anchor, TimeUs interval, int trailFrames) noexcept
+{
+    if (trailFrames <= 1) {
+        return anchor;
+    }
+    const TimeUs back = TimeUs(trailFrames - 1) * interval;
+    return anchor > back ? anchor - back : 0;
+}
+
 } // namespace Trail

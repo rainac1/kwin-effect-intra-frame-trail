@@ -11,6 +11,7 @@
 
 #include <kwin/core/rendertarget.h>
 #include <kwin/core/renderviewport.h>
+#include <kwin/cursor.h>
 #include <kwin/effect/effecthandler.h>
 #include <kwin/effect/globals.h>
 #include <kwin/input.h>
@@ -80,6 +81,17 @@ TrailEffect::TrailEffect()
     // current position but keeps no history, so we collect it ourselves. The
     // spy is uninstalled automatically when this object is destroyed.
     input()->installInputEventSpy(this);
+
+    // Getting the cursor image is cheap for theme shapes but expensive when a
+    // client provides the cursor contents -- which is the case for every
+    // Xwayland app, because Xwayland hands its cursors over as a wl_surface.
+    // KWin then renders the cursor scene into a texture and reads it back
+    // (Application::cursorImage() -> grabCursorOpenGL()), so this must not
+    // happen on every frame. The compositor tells us when the contents change.
+    connect(effects, &EffectsHandler::cursorShapeChanged, this, [this] {
+        m_cursorDirty = true;
+    });
+
     m_selfCheck = qEnvironmentVariableIntValue("TRAIL_KWIN_SELFCHECK") == 1;
     reconfigure(ReconfigureAll);
 }
@@ -137,33 +149,68 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
     const Trail::TimeUs now = monotonicNowUs();
     OutputFrameState &frame = m_frames[data.screen];
 
-    // Samples newer than the paint pass that happened m_trailFrames frames ago.
-    // With the default of one frame this is exactly the previous frame interval.
-    Trail::TimeUs anchor = frame.lastPaint;
-    if (anchor == 0) {
-        anchor = now > kDefaultFrameIntervalUs ? now - kDefaultFrameIntervalUs : 0;
-    }
-    Trail::TimeUs since = anchor;
-    if (m_trailFrames > 1) {
-        const Trail::TimeUs back = Trail::TimeUs(m_trailFrames - 1) * frame.interval;
-        since = anchor > back ? anchor - back : 0;
+    // The cursor image has to be up to date *before* the damage region is
+    // computed, because the damage has to describe exactly what is going to be
+    // drawn. While this was refreshed from paintScreen(), a cursor that changed
+    // its shape or size was painted with the new geometry into a region that
+    // had been computed from the old one; the pixels outside that region were
+    // never repainted afterwards and stayed on screen as residue.
+    //
+    // m_cursorDirty and cursorGeometryChanged() keep this from becoming a
+    // per-frame fetch; the other two terms only retry while there is nothing
+    // usable to draw with, which is cheap because a cursor without geometry
+    // returns before any GL work.
+    if (m_enabled && (m_cursorDirty || !m_cursorTexture || !m_cursorShape.isValid() || cursorGeometryChanged())) {
+        // KWin makes the compositor's context current before prePaintScreen(),
+        // so this is normally a no-op; it keeps the upload below valid when the
+        // effect is not first in the chain.
+        effects->makeOpenGLContextCurrent();
+        refreshCursorShape();
+        m_cursorDirty = false;
     }
 
-    // Snapshot once per frame: painting then uses exactly the set whose area was
-    // added to the damage region, so nothing is drawn outside the damaged area
-    // and nothing needs to be redrawn later.
-    frame.samples.resize(std::size_t(m_maxSamples));
-    const std::size_t count = m_ring.collect(since, frame.samples.data(), std::size_t(m_maxSamples));
-    frame.samples.resize(count);
+    // Only take samples out of the ring when they can actually be drawn. If the
+    // cursor image is momentarily unavailable, the samples stay buffered and
+    // are picked up by the next frame instead of being dropped silently.
+    const bool drawable = canDraw();
+
+    if (drawable) {
+        // Samples newer than the last frame that was actually drawn. Keeping
+        // this anchor separate from lastPaint means a frame that could not draw
+        // does not shift the window forward and lose its samples.
+        Trail::TimeUs anchor = frame.lastCollect;
+        if (anchor == 0) {
+            anchor = now > kDefaultFrameIntervalUs ? now - kDefaultFrameIntervalUs : 0;
+        }
+        const Trail::TimeUs since = Trail::samplingWindowStart(anchor, frame.interval, m_trailFrames);
+
+        // Snapshot once per frame: painting then uses exactly the set whose area
+        // was added to the damage region, so nothing is drawn outside the
+        // damaged area and nothing needs to be redrawn later.
+        frame.samples.resize(std::size_t(m_maxSamples));
+        const std::size_t count = m_ring.collect(since, frame.samples.data(), std::size_t(m_maxSamples));
+        frame.samples.resize(count);
+
+        // The window continues from the newest sample that was actually drawn,
+        // not from the wall clock. Samples carry input event timestamps, and an
+        // event that happened before this frame started is handed to us only
+        // after the collect above; anchoring on `now` put such a sample behind
+        // the next window start, so it was dropped - one per frame in the steady
+        // state. Samples arrive in order, so everything arriving later is newer
+        // than what is drawn here.
+        if (!frame.samples.empty()) {
+            frame.lastCollect = std::max(frame.lastCollect, frame.samples.back().time);
+        }
+    } else {
+        frame.samples.clear();
+    }
 
     // Repaint both the cursors drawn last frame (so the old trail disappears)
     // and the ones drawn now.
     Region damage = frame.previousDamage;
     frame.damage = Region();
-    if (m_enabled && m_cursorShape.isValid()) {
-        for (const Trail::Sample &sample : frame.samples) {
-            frame.damage += toIntRect(Trail::cursorRect(sample, m_cursorShape));
-        }
+    for (const Trail::Sample &sample : frame.samples) {
+        frame.damage += toIntRect(Trail::cursorRect(sample, m_cursorShape));
     }
     damage |= frame.damage;
     if (!damage.isEmpty()) {
@@ -205,7 +252,9 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
         return;
     }
 
-    updateCursorShape();
+    // prePaintScreen() refreshed the cursor image before computing the damage
+    // and only collected samples when they can be drawn, so the geometry here is
+    // the same one the damage was computed from.
     if (!m_cursorTexture || !m_cursorShape.isValid()) {
         return;
     }
@@ -320,27 +369,56 @@ void TrailEffect::selfCheckAfter()
     }
 }
 
-void TrailEffect::updateCursorShape()
+bool TrailEffect::cursorGeometryChanged() const
 {
-    const PlatformCursorImage cursor = effects->cursorImage();
-    const QImage image = cursor.image();
+    // Cursor::rect() is the source size without the pointer position, so
+    // comparing it against what the cached image was built from is stable across
+    // frames -- unlike geometry(), which translates the rectangle by the ever
+    // changing pointer position and could therefore differ in the last bit.
+    const Cursor *cursor = Cursors::self()->currentCursor();
+    if (!cursor) {
+        return true;
+    }
+    return cursor->source() != m_cursorImageState.source
+        || cursor->rect().size() != m_cursorImageState.size
+        || cursor->hotspot() != m_cursorImageState.hotspot;
+}
+
+void TrailEffect::refreshCursorShape()
+{
+    const Cursor *cursor = Cursors::self()->currentCursor();
+    m_cursorImageState = CursorImageState{
+        .source = cursor ? cursor->source() : nullptr,
+        .size = cursor ? cursor->rect().size() : QSizeF(),
+        .hotspot = cursor ? cursor->hotspot() : QPointF(),
+    };
+
+    const PlatformCursorImage cursorImage = effects->cursorImage();
+    const QImage image = cursorImage.image();
     if (image.isNull()) {
         m_cursorTexture.reset();
         m_cursorShape = Trail::CursorShape();
+        m_cursorImageKey = 0;
         return;
     }
 
     const qreal dpr = image.devicePixelRatio() > 0.0 ? image.devicePixelRatio() : 1.0;
     m_cursorShape.size = QSizeF(image.size()) / dpr;
-    m_cursorShape.hotspot = cursor.hotSpot();
+    m_cursorShape.hotspot = cursorImage.hotSpot();
 
     // Uploading is only needed when the pointer image actually changed, e.g.
-    // when moving from a window to a text field.
+    // when moving from a window to a text field or when an animated cursor
+    // advances to its next sprite.
     if (!m_cursorTexture || m_cursorImageKey != qint64(image.cacheKey())) {
         m_cursorTexture = GLTexture::upload(image);
         m_cursorImageKey = qint64(image.cacheKey());
         qCDebug(TRAIL) << "cursor image uploaded:" << image.size() << "hotspot" << m_cursorShape.hotspot;
     }
+}
+
+bool TrailEffect::canDraw() const
+{
+    return m_enabled && m_cursorTexture && m_cursorShape.isValid();
 }
 
 bool TrailEffect::blocksDirectScanout() const

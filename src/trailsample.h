@@ -119,4 +119,15 @@ struct CursorShape
  */
 QRectF cursorRect(const Sample &sample, const CursorShape &shape);
 
+/**
+ * Oldest timestamp for which a frame should draw samples.
+ *
+ * @p anchor is the start of the sampling window of the last frame that was
+ * actually collected, not merely started: a frame that cannot draw must not
+ * move the window forward, otherwise the samples produced in the meantime would
+ * never be drawn. @p trailFrames widens the window backwards by whole frame
+ * intervals, which is what produces a longer trail.
+ */
+TimeUs samplingWindowStart(TimeUs anchor, TimeUs interval, int trailFrames) noexcept;
+
 } // namespace Trail
