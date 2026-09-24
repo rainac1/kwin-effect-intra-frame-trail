@@ -1,7 +1,7 @@
 trail
 =====
 
-Intra-frame trail: a KWin effect that redraws the cursor at every position sampled during the previous frame. Such a mouse reports far more positions per frame than the compositor draws, so a moving pointer leaves a trail of the copies it would otherwise skip; drawing them improves the pointer's visual smoothness and click accuracy. C++ and OpenGL, built against kwin's effect API. Needs an OpenGL compositor.
+Intra-frame trail: a KWin effect that redraws the cursor at every position sampled during the previous frame. Modern mouses report far more positions per frame than the compositor draws, so a moving pointer leaves a trail of the copies it would otherwise skip; drawing them improves the pointer's visual smoothness and click accuracy. C++ and OpenGL, built against kwin's effect API. Needs an OpenGL compositor.
 
 Not just for extreme 8000Hz mice: Even with a standard 250Hz office mouse on a 60Hz display, it quadruples the perceived cursor density, turning choppy, nauseating cursor jumping into smooth, readable motion.
 
