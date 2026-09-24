@@ -10,7 +10,7 @@
         "Description[zh_CN]": "在上一帧内采样到的每个指针位置渲染当前指针",
         "EnabledByDefault": false,
         "Icon": "input-mouse",
-        "License": "GPL",
+        "License": "GPL-2.0-or-later",
         "Name": "Pointer Trail",
         "Name[zh_CN]": "指针轨迹",
         "Version": "0.1.0"

@@ -1,4 +1,4 @@
-Pointer Trail — 指针轨迹 KWin Effect
+trail -- intra-frame pointer trail for KWin
 Copyright (C) 2026 Trail KWin Effect contributors
 
 SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,11 +10,11 @@ version.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
-The full text of the GNU General Public License version 2 is available at:
-  https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+The full text is in LICENSES/GPL-2.0-or-later.txt.
 
-Every source file in this repository carries an SPDX license identifier in its
-header. To vendor the full license text locally, drop it in as
-`LICENSES/GPL-2.0-or-later.txt` (the REUSE convention).
+GPL-2.0-or-later is not a free choice here. The effect includes KWin headers and
+links libkwin, and both are GPL-2.0-or-later, so the plugin is a derived work
+under that license. "or later" additionally keeps the combination with Qt6
+(LGPL-3.0-only) valid, which GPL-2.0-only would not.
