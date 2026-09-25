@@ -76,6 +76,34 @@ std::size_t SampleRing::collect(TimeUs since, Sample *out, std::size_t maxOut) n
     return count;
 }
 
+std::size_t SampleRing::snapshot(TimeUs since, Sample *out, std::size_t maxOut) const noexcept
+{
+    const std::uint64_t write = m_write.load(std::memory_order_acquire);
+    // Everything older than this has been overwritten by the producer, whether
+    // or not collect() has consumed it.
+    const std::uint64_t oldest = write > m_data.size() ? write - m_data.size() : 0;
+
+    std::uint64_t first = write;
+    for (std::uint64_t seq = oldest; seq < write; ++seq) {
+        if (m_data[seq & m_mask].time >= since) {
+            first = seq;
+            break;
+        }
+    }
+    if (write - first > maxOut) {
+        first = write - maxOut;
+    }
+
+    std::size_t count = 0;
+    for (std::uint64_t seq = first; seq < write && count < maxOut; ++seq) {
+        const Sample &sample = m_data[seq & m_mask];
+        if (sample.time >= since) {
+            out[count++] = sample;
+        }
+    }
+    return count;
+}
+
 void SampleRing::reset() noexcept
 {
     m_read.store(m_write.load(std::memory_order_acquire), std::memory_order_release);

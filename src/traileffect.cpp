@@ -265,21 +265,29 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     // Paint everything below the effect first, then draw on top of it.
     effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen);
 
-    // A capture pass draws the snapshot the output pass collected into its own
-    // target. Only the output pass owns frame.previousDamage; the capture's own
-    // previous trail was added to data.paint by prepareCaptureDamage().
-    const auto it = m_frames.find(screen);
-    if (it == m_frames.end()) {
-        return;
-    }
-    OutputFrameState &frame = *it;
+    // A capture pass draws its own snapshot into its own target; only the
+    // output pass owns frame.previousDamage. The capture's previous trail and
+    // the snapshot's damage were added to data.paint by prepareCaptureDamage().
+    const bool outputPass = isOutputRenderPass(screen);
 
-    if (isOutputRenderPass(screen)) {
+    const std::vector<Trail::Sample> *samples = nullptr;
+    Region painted;
+    if (outputPass) {
+        const auto it = m_frames.find(screen);
+        if (it == m_frames.end()) {
+            return;
+        }
+        OutputFrameState &frame = *it;
         // The next frame has to repaint exactly the area painted now.
         frame.previousDamage = frame.damage;
+        samples = &frame.samples;
+        painted = frame.damage;
+    } else {
+        samples = &m_captureSamples;
+        painted = m_captureCurrentDamage;
     }
 
-    if (!m_enabled || !effects->isOpenGLCompositing() || frame.samples.empty()) {
+    if (!m_enabled || !effects->isOpenGLCompositing() || samples->empty()) {
         return;
     }
 
@@ -300,7 +308,7 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     const QPointF deviceHotspot = m_cursorShape.hotspot * scale;
     const QMatrix4x4 projection = viewport.projectionMatrix();
 
-    selfCheckBefore(frame.damage, scale, renderTarget.size());
+    selfCheckBefore(painted, scale, renderTarget.size());
 
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
     GLint previousSource = GL_ONE;
@@ -315,7 +323,7 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
 
     {
         ShaderBinder shader(ShaderTrait::MapTexture);
-        for (const Trail::Sample &sample : frame.samples) {
+        for (const Trail::Sample &sample : *samples) {
             // One draw call per sample against a shared, cached vertex buffer.
             // Samples are ordered oldest first, so the newest cursor ends up on
             // top, right behind the real pointer.
@@ -333,7 +341,7 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     }
 
     selfCheckAfter();
-    reportFrameStats(frame.samples.size());
+    reportFrameStats(samples->size());
 }
 
 void TrailEffect::selfCheckBefore(const Region &logicalDamage, double scale, const QSize &targetSize)
@@ -469,16 +477,31 @@ bool TrailEffect::isOutputRenderPass(LogicalOutput *screen) const
 
 void TrailEffect::prepareCaptureDamage(ScreenPrePaintData &data)
 {
-    const auto it = m_frames.constFind(data.screen);
-    if (it == m_frames.constEnd() || !data.view) {
-        // Nothing collected yet, or no view to attribute the target to.
+    if (!data.view) {
         return;
     }
-    // frame.damage is already the union of the rects of the snapshot that
-    // paintScreen() is about to draw.
-    const Region current = it->damage;
-
     RenderView *const view = data.view;
+
+    // Sample the ring for the capture's own instant. Reusing the output frame's
+    // snapshot made the recorded trail depend on where the capture fell
+    // relative to the output frame: at similar rates it could render one
+    // snapshot twice and skip the samples that arrived since it, which showed
+    // up as a stuttering trail in the recording. The snapshot does not consume,
+    // so the output frame still gets its own samples.
+    const Trail::TimeUs now = monotonicNowUs();
+    const Trail::TimeUs interval = m_intervalUs > 0 ? m_intervalUs : kDefaultFrameIntervalUs;
+    const Trail::TimeUs window = Trail::TimeUs(std::max(1, m_trailFrames)) * interval;
+    const Trail::TimeUs since = now > window ? now - window : 0;
+
+    m_captureSamples.resize(std::size_t(m_maxSamples));
+    const std::size_t count = m_ring.snapshot(since, m_captureSamples.data(), std::size_t(m_maxSamples));
+    m_captureSamples.resize(count);
+
+    m_captureCurrentDamage = Region();
+    for (const Trail::Sample &sample : m_captureSamples) {
+        m_captureCurrentDamage += toIntRect(Trail::cursorRect(sample, m_cursorShape));
+    }
+
     if (!m_captureDamage.contains(view)) {
         // A capture view dies with its stream, or with its one-shot capture;
         // drop the remembered damage with it.
@@ -490,8 +513,8 @@ void TrailEffect::prepareCaptureDamage(ScreenPrePaintData &data)
     // This target still holds the trail that this view drew last time -- the
     // capture's own damage tracking does not know about it -- so that has to be
     // repaired in the same pass.
-    const Region damage = m_captureDamage.value(view) | current;
-    m_captureDamage.insert(view, current);
+    const Region damage = m_captureDamage.value(view) | m_captureCurrentDamage;
+    m_captureDamage.insert(view, m_captureCurrentDamage);
     if (!damage.isEmpty()) {
         data.paint += damage;
     }

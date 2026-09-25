@@ -150,6 +150,15 @@ private:
      */
     QHash<RenderView *, Region> m_captureDamage;
 
+    /**
+     * Snapshot and damage for the capture pass currently being prepared. A
+     * capture samples the ring for its own instant instead of reusing the
+     * output frame's snapshot, so its trail does not depend on where the
+     * capture falls relative to the output frame.
+     */
+    std::vector<Trail::Sample> m_captureSamples;
+    Region m_captureCurrentDamage;
+
     std::unique_ptr<GLTexture> m_cursorTexture;
     qint64 m_cursorImageKey = 0;
     Trail::CursorShape m_cursorShape;

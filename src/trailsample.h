@@ -74,6 +74,17 @@ public:
      */
     std::size_t collect(TimeUs since, Sample *out, std::size_t maxOut) noexcept;
 
+    /**
+     * Copy every buffered sample with time >= @p since into @p out, oldest
+     * first, like collect(), but without consuming: the read index is left
+     * alone, so a second reader (a capture pass rendering the same motion into
+     * a recording) can take the samples the painter already drew.
+     *
+     * It scans the whole buffer rather than the unconsumed tail, because the
+     * interesting samples are exactly the ones collect() has already taken.
+     */
+    std::size_t snapshot(TimeUs since, Sample *out, std::size_t maxOut) const noexcept;
+
     /** Discard all buffered samples. */
     void reset() noexcept;
 

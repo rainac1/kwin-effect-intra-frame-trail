@@ -349,14 +349,21 @@ every capture view passes nullptr there. This is the same test KWin's ScreenTran
 uses to keep its offscreen capture out of its own painting.
 
 A capture pass must not collect: SampleRing::collect() consumes, so collecting there would
-take the samples from the output frame and drop the trail to the capture rate. The pass
-instead draws the snapshot the output already collected (frame.samples, with frame.damage
-as exactly its rects) into its own target. Its previous trail has to be repaired in that
-target, which the output's frame.previousDamage says nothing about, so the effect keeps a
-second damage record keyed by the capture view:
+take the samples from the output frame and drop the trail to the capture rate. It reads the
+ring with a second, non-consuming reader instead:
 
-    data.paint += m_captureDamage[view] U frame.damage
-    m_captureDamage[view] = frame.damage
+    SampleRing::snapshot(since, ...)   same window, read index untouched
+
+The window is anchored on the capture's own clock, not on the output frame's lastCollect.
+With the output frame's snapshot the recorded trail depended on where the capture fell
+relative to the output frame: at similar rates it could render one snapshot twice and skip
+the samples that arrived since it, which showed up as a stuttering trail in the recording.
+
+Each capture target then needs its own damage record, because the output's previousDamage
+says nothing about what a PipeWire buffer already holds:
+
+    data.paint += m_captureDamage[view] U m_captureCurrentDamage
+    m_captureDamage[view] = m_captureCurrentDamage
 
 The screencast's own DamageJournal then carries the rects to whichever PipeWire buffer
 held them, and a screenshot repaints its whole target anyway. Entries are dropped when
