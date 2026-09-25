@@ -2,17 +2,17 @@
     "KPlugin": {
         "Authors": [
             {
-                "Name": "Trail KWin Effect contributors"
+                "Name": "rainac1"
             }
         ],
         "Category": "Appearance",
         "Description": "Renders the pointer at every position sampled during the previous frame",
         "Description[zh_CN]": "在上一帧内采样到的每个指针位置渲染当前指针",
-        "EnabledByDefault": false,
+        "EnabledByDefault": true,
         "Icon": "input-mouse",
         "License": "GPL-2.0-or-later",
-        "Name": "Pointer Trail",
-        "Name[zh_CN]": "指针轨迹",
+        "Name": "Intra-frame Trail",
+        "Name[zh_CN]": "帧内尾迹",
         "Version": "0.1.0"
     }
 }
