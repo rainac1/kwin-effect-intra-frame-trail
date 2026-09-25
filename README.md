@@ -9,8 +9,13 @@ Not just for extreme 8000Hz mice: Even with a standard 250Hz office mouse on a 6
 Requirements
 ------------
 
-KWin 6.7.5. kwin-devel must be the exact same version -- the effect plugin ABI is
-unstable and kwin refuses to load a plugin built against a different one.
+KWin 6.7.x. The source only uses the effect API as it exists throughout the 6.7
+series, so any 6.7 point release builds it. CMakeLists.txt asks for KWin without a
+version, and the pin comes from KWin instead: config-kwin.h embeds the full version
+in the plugin IID (org.kde.kwin.EffectPluginFactory6.7.5), which kwin compares with
+its own before instantiating anything. kwin-devel must therefore be the exact same
+version as the running kwin, and the effect has to be rebuilt after every kwin
+upgrade -- a 6.7.0 build does not load on 6.7.5.
 
 On Fedora:
 
