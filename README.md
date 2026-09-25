@@ -46,6 +46,10 @@ edit src/metadata.json the embedded metadata is not regenerated on its own:
 
 helpers/build.sh does that for you.
 
+A running kwin keeps executing the build it loaded, so a rebuild alone is invisible
+until the plugin is reloaded; helpers/build.sh reloads it automatically when the
+effect is loaded, and docs/USAGE.md has the manual calls ("Reload after a rebuild").
+
 
 Enable
 ------

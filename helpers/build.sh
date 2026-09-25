@@ -4,6 +4,9 @@
 #
 # build.sh -- configure, build and install the effect.
 #
+# After installing, an effect that is loaded in the running session is reloaded over
+# D-Bus (unloadEffect + loadEffect), so no kwin restart is needed to run the new build.
+#
 # Defaults to installing into ~/.local (per the project conventions: never into
 # /usr). If a local development sysroot exists it is used automatically, so the
 # build works on machines without kwin-devel installed system wide.
@@ -21,6 +24,32 @@ BUILD_DIR=${BUILD_DIR:-"$ROOT_DIR/build"}
 BUILD_TYPE=${BUILD_TYPE:-RelWithDebInfo}
 PREFIX=${PREFIX:-"$HOME/.local"}
 SYSROOT=${SYSROOT:-"$ROOT_DIR/.sysroot"}
+
+# A running kwin keeps executing the mapping of the plugin it loaded, so installing
+# a new build changes nothing until the effect is unloaded and loaded again. Do that
+# here, but only when the effect is loaded: a disabled effect should stay unloaded.
+# Never fatal -- without a session bus, or with the plugin unknown to kwin, the
+# kwinrc value still applies at the next login.
+reload_running_effect() {
+    local plugin_id=trail reply
+    command -v gdbus >/dev/null 2>&1 || return 0
+    if ! reply=$(gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.isEffectLoaded "$plugin_id" 2>/dev/null); then
+        return 0 # no running kwin on this session bus
+    fi
+    if [[ "$reply" != *true* ]]; then
+        return 0 # not loaded, nothing to switch over
+    fi
+    gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.unloadEffect "$plugin_id" >/dev/null 2>&1 || true
+    if gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.loadEffect "$plugin_id" >/dev/null 2>&1; then
+        echo "reloaded '$plugin_id' in the running kwin (unloadEffect + loadEffect)"
+    else
+        echo "warning: unloaded '$plugin_id' but could not load it again;" >&2
+        echo "         it will be back at the next login" >&2
+    fi
+}
 
 cmake_args=(
     -S "$ROOT_DIR"
@@ -51,6 +80,8 @@ fi
 cmake --build "$BUILD_DIR" --parallel "$(nproc)"
 cmake --install "$BUILD_DIR"
 
+reload_running_effect
+
 echo
 echo "installed plugin:"
 for libdir in lib64 lib; do
@@ -63,7 +94,8 @@ echo
 echo "next steps:"
 echo "  helpers/install-session-env.sh    # once: let KWin find plugins in ~/.local,"
 echo "                                    # then log out and back in"
-echo "  helpers/enable-effect.sh enable   # enable in the current session"
+echo "  helpers/enable-effect.sh enable   # enable and load it in the current session"
+echo "  helpers/enable-effect.sh reload   # reload by hand after an install"
 echo "  helpers/run-nested.sh             # or try it in an isolated nested compositor"
 echo
 echo "details: docs/USAGE.md"

@@ -55,8 +55,9 @@ instantiated inside the compositor process, unsandboxed. Test in a nested sessio
 Enable, disable, query
 ----------------------
 
-    helpers/enable-effect.sh enable     # [Plugins] trailEnabled=true
-    helpers/enable-effect.sh disable
+    helpers/enable-effect.sh enable     # [Plugins] trailEnabled=true, then loadEffect
+    helpers/enable-effect.sh disable    # [Plugins] trailEnabled=false, then unloadEffect
+    helpers/enable-effect.sh reload     # unload + load the installed .so, kwinrc untouched
     helpers/enable-effect.sh status     # kwinrc value plus live D-Bus state
 
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
@@ -68,6 +69,45 @@ Loading without touching kwinrc:
 
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
         --method org.kde.kwin.Effects.loadEffect trail
+
+
+Reload after a rebuild
+----------------------
+
+A running kwin keeps executing the mapping of the .so it loaded, so rebuilding and
+installing changes the file on disk but not what the compositor runs. Unload and load
+to switch to the new build, without a re-login or a compositor restart:
+
+    gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.unloadEffect trail
+    gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.loadEffect trail      # returns (true,)
+
+helpers/build.sh does this automatically after cmake --install when the effect is
+loaded, and helpers/enable-effect.sh reload does it by hand; both leave a disabled
+effect alone.
+
+reconfigureEffect is not a reload: it calls Effect::reconfigure() on the already
+loaded instance and never re-reads the file, so it is for [Effect-trail] settings
+only. PluginEffectLoader::findEffect() asks for the plugin metadata on every call
+instead of caching it, which is why a rebuilt plugin is picked up at all: a build
+whose embedded metadata is invalid reports isEffectSupported false, and the next
+good install flips it to true with no restart. Installing over the file while the
+effect is loaded does not corrupt it: cmake's install replaces the file with a new
+inode rather than rewriting it in place (verified on this checkout), so the process
+keeps its old mapping until it is unloaded -- and that stale mapping is exactly why a
+rebuild by itself appears to do nothing. Unload first if you would rather not rely on
+that.
+
+[Plugins] trailEnabled is read when the session starts and not before: editing it,
+with kwriteconfig6 or anything else, does not load or unload a running kwin -- measured,
+no change after six seconds either way. helpers/enable-effect.sh therefore writes it
+for the next login and then makes the change happen now with loadEffect/unloadEffect.
+
+This needs the running kwin to already have the user plugin directory on Qt's path
+(helpers/install-session-env.sh, then one login). A process cannot gain a plugin path
+at runtime; if isEffectSupported is false for that reason, only a re-login or
+helpers/run-nested.sh helps.
 
 
 Configuration
@@ -134,6 +174,9 @@ isEffectSupported true, but nothing is drawn:
 
 Listed but greyed out, log says "has not matching plugin version":
     built against a different kwin. Rebuild.
+
+Rebuilt, but the running compositor still behaves the old way:
+    it keeps the .so it loaded. unloadEffect + loadEffect; see "Reload after a rebuild".
 
 No kwin_effect_trail output at all:
     the plugin is not loaded; see the first two entries.

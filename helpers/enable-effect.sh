@@ -2,14 +2,15 @@
 # SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# enable-effect.sh -- switch the effect on or off for the current user, and
-# report whether the running KWin can actually see it.
+# enable-effect.sh -- switch the effect on or off for the current user, reload the
+# installed plugin, and report whether the running KWin can actually see it.
 #
-# This edits the user's own kwinrc ([Plugins] trailEnabled), so it affects the
-# running desktop session. Use helpers/run-nested.sh if you want an isolated
+# The kwinrc value ([Plugins] trailEnabled) is what persists the choice for the next
+# login; it is only read at session start, so enable/disable/reload also act on the
+# running compositor over D-Bus. Use helpers/run-nested.sh for an isolated
 # environment instead.
 #
-# Usage: helpers/enable-effect.sh [enable|disable|status]
+# Usage: helpers/enable-effect.sh [enable|disable|reload|status]
 #
 set -euo pipefail
 
@@ -17,7 +18,8 @@ action=${1:-enable}
 PLUGIN_ID=trail
 
 # Ask the running compositor over D-Bus. KWin exports
-# org.kde.kwin.Effects on /Effects with isEffectSupported()/isEffectLoaded().
+# org.kde.kwin.Effects on /Effects with isEffectSupported(), isEffectLoaded(),
+# loadEffect() and unloadEffect().
 kwin_effects_call() {
     local method=$1
     command -v gdbus >/dev/null 2>&1 || return 1
@@ -53,11 +55,39 @@ case "$action" in
 enable)
     kwriteconfig6 --file kwinrc --group Plugins --key "$PLUGIN_ID"Enabled true
     echo "effect enabled (kwinrc [Plugins] ${PLUGIN_ID}Enabled=true)"
+    if loaded=$(kwin_effects_call loadEffect); then
+        case "$loaded" in
+        true) echo "  loaded into the running session (D-Bus loadEffect)" ;;
+        *) echo "  the running kwin did not load it; see the state below" ;;
+        esac
+    else
+        echo "  (could not reach the running KWin over D-Bus; kwinrc applies at next login)"
+    fi
     report_state
     ;;
 disable)
     kwriteconfig6 --file kwinrc --group Plugins --key "$PLUGIN_ID"Enabled false
     echo "effect disabled (kwinrc [Plugins] ${PLUGIN_ID}Enabled=false)"
+    if kwin_effects_call unloadEffect >/dev/null; then
+        echo "  unloaded from the running session (D-Bus unloadEffect)"
+    else
+        echo "  (could not reach the running KWin over D-Bus; kwinrc applies at next login)"
+    fi
+    report_state
+    ;;
+reload)
+    # A running kwin keeps executing the mapping of the .so it loaded, so a rebuild
+    # or reinstall changes nothing until the plugin is unloaded and loaded again.
+    if ! kwin_effects_call unloadEffect >/dev/null; then
+        echo "error: could not reach the running KWin over D-Bus; nothing to reload" >&2
+        exit 1
+    fi
+    if loaded=$(kwin_effects_call loadEffect); then
+        echo "plugin '$PLUGIN_ID' reloaded for the running session (unloadEffect + loadEffect)"
+        if [[ "$loaded" != "true" ]]; then
+            echo "  warning: KWin reported loadEffect=$loaded" >&2
+        fi
+    fi
     report_state
     ;;
 status)
@@ -66,14 +96,14 @@ status)
     report_state
     ;;
 *)
-    echo "usage: $0 [enable|disable|status]" >&2
+    echo "usage: $0 [enable|disable|reload|status]" >&2
     exit 2
     ;;
 esac
 
 if [[ "$action" != "status" ]]; then
     echo
-    echo "KWin applies effect configuration changes at runtime; if the effect does"
-    echo "not appear immediately, toggle it in System Settings > Window Management"
-    echo "> Desktop Effects, or restart the session."
+    echo "kwinrc is only read when the session starts, so the kwinrc value is what"
+    echo "persists the choice for the next login, while the D-Bus call is what changes"
+    echo "this session. Use 'reload' after installing a rebuilt plugin."
 fi
