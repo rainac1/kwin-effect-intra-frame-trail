@@ -117,7 +117,7 @@ Coordinate spaces are the trap here.
 
 2.6 Plugin contract
 
-    kcoreaddons_add_plugin(trail SOURCES ... INSTALL_NAMESPACE "kwin/effects/plugins")
+    kcoreaddons_add_plugin(trail-capturable SOURCES ... INSTALL_NAMESPACE "kwin/effects/plugins")
     requires BUILD_SHARED_LIBS=ON; otherwise it builds a static plugin that cannot be
     loaded.
 
@@ -125,9 +125,9 @@ Coordinate spaces are the trap here.
     return effects->isOpenGLCompositing();).
 
     The plugin id is the file name, not a metadata field (KDE warns when metadata sets
-    Id). The file has to be trail.so, not libtrail.so, hence
-    set_target_properties(trail PROPERTIES PREFIX ""), and kwinrc uses
-    [Plugins] trailEnabled=true.
+    Id). The file has to be trail-capturable.so, not libtrail-capturable.so, hence
+    set_target_properties(trail-capturable PROPERTIES PREFIX ""), and kwinrc uses
+    [Plugins] trail-capturableEnabled=true.
 
     ABI: the headers state that effect plugins must be compiled against the same
     kwineffects version as kwin (6.7.5 against kwin-devel 6.7.5). The actual guard is
@@ -378,9 +378,9 @@ No automated tests. Verification means running it.
 Measured once on a 1280x720 output with a host fractional scale of 1.75, so 2240x1260
 device pixels:
 
-    kwin_effect_trail: cursor image uploaded: QSize(56, 56) hotspot QPointF(4,4)
-    kwin_effect_trail: trail stats: 994.8 cursors/s, 119.9 frames/s, 8.30 cursors/frame, 0 dropped
-    kwin_effect_trail: selfcheck: pointer draw changed 231 of 3480 pixels in QRect(427,677 60x58)
+    kwin_effect_trail_capturable: cursor image uploaded: QSize(56, 56) hotspot QPointF(4,4)
+    kwin_effect_trail_capturable: trail stats: 994.8 cursors/s, 119.9 frames/s, 8.30 cursors/frame, 0 dropped
+    kwin_effect_trail_capturable: selfcheck: pointer draw changed 231 of 3480 pixels in QRect(427,677 60x58)
 
 Three things to check against it:
 
@@ -398,13 +398,13 @@ Three things to check against it:
 8. Configuration
 ----------------
 
-~/.config/kwinrc, group [Effect-trail]:
+~/.config/kwinrc, group [Effect-trail-capturable]:
 
-    Enabled       default true    runtime switch, independent of [Plugins] trailEnabled
+    Enabled       default true    runtime switch, independent of [Plugins] trail-capturableEnabled
     TrailFrames   default 1       frame intervals of samples to keep
     MaxSamples    default 256     per-frame cursor cap
 
-Enabling the effect itself: [Plugins] trailEnabled=true, or
+Enabling the effect itself: [Plugins] trail-capturableEnabled=true, or
 helpers/enable-effect.sh enable.
 
 

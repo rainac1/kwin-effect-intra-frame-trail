@@ -38,13 +38,13 @@ mkdir -p "$CONFIG_HOME" "$CACHE_HOME"
 # the plugin id, and its own settings live in [Effect-<id>].
 cat > "$CONFIG_HOME/kwinrc" <<EOF
 [Plugins]
-trailEnabled=true
+trail-capturableEnabled=true
 # Shake Cursor magnifies the pointer when it is moved quickly back and forth,
 # which is exactly what one does when looking at the trail; the magnified
 # pointer would obscure it. It is on by default, so switch it off here.
 shakecursorEnabled=false
 
-[Effect-trail]
+[Effect-trail-capturable]
 Enabled=true
 TrailFrames=$TRAIL_FRAMES
 MaxSamples=256
@@ -56,7 +56,7 @@ export XDG_CONFIG_HOME="$CONFIG_HOME"
 export XDG_CACHE_HOME="$CACHE_HOME"
 # Without this, KWin sends its logging to the journal instead of stderr.
 export QT_FORCE_STDERR_LOGGING=1
-export QT_LOGGING_RULES="kwin_effect_trail.debug=true${QT_LOGGING_RULES:+;$QT_LOGGING_RULES}"
+export QT_LOGGING_RULES="kwin_effect_trail_capturable.debug=true${QT_LOGGING_RULES:+;$QT_LOGGING_RULES}"
 
 args=(--socket "$SOCKET" --width "$WIDTH" --height "$HEIGHT")
 if [[ -n "$CLIENT" ]]; then

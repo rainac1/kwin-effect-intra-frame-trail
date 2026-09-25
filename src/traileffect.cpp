@@ -31,7 +31,7 @@
 #include <algorithm>
 #include <ctime>
 
-Q_LOGGING_CATEGORY(TRAIL, "kwin_effect_trail")
+Q_LOGGING_CATEGORY(TRAIL, "kwin_effect_trail_capturable")
 
 namespace KWin
 {
@@ -104,7 +104,7 @@ void TrailEffect::reconfigure(ReconfigureFlags flags)
 {
     Q_UNUSED(flags)
 
-    const KConfigGroup config = KSharedConfig::openConfig()->group(QStringLiteral("Effect-trail"));
+    const KConfigGroup config = KSharedConfig::openConfig()->group(QStringLiteral("Effect-trail-capturable"));
     m_enabled = config.readEntry("Enabled", true);
     m_trailFrames = std::clamp(config.readEntry("TrailFrames", 1), 1, kMaxTrailFrames);
     m_maxSamples = std::clamp(config.readEntry("MaxSamples", kDefaultMaxSamples), 1, int(m_ring.capacity()));

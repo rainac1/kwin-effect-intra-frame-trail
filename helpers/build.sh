@@ -31,7 +31,7 @@ SYSROOT=${SYSROOT:-"$ROOT_DIR/.sysroot"}
 # Never fatal -- without a session bus, or with the plugin unknown to kwin, the
 # kwinrc value still applies at the next login.
 reload_running_effect() {
-    local plugin_id=trail reply
+    local plugin_id=trail-capturable reply
     command -v gdbus >/dev/null 2>&1 || return 0
     if ! reply=$(gdbus call --session --dest org.kde.KWin --object-path /Effects \
         --method org.kde.kwin.Effects.isEffectLoaded "$plugin_id" 2>/dev/null); then
@@ -70,11 +70,11 @@ cmake "${cmake_args[@]}"
 # it does not know that the embedded plugin metadata changed. Drop the autogen
 # output for the plugin when metadata.json is newer than the built plugin, so the
 # metadata is regenerated instead of silently keeping the old values.
-plugin_file="$BUILD_DIR/plugins/kwin/effects/plugins/trail.so"
+plugin_file="$BUILD_DIR/plugins/kwin/effects/plugins/trail-capturable.so"
 if [[ -f "$ROOT_DIR/src/metadata.json" && -f "$plugin_file" ]] \
     && [[ "$ROOT_DIR/src/metadata.json" -nt "$plugin_file" ]]; then
     echo "metadata.json changed: regenerating plugin metadata"
-    rm -rf "$BUILD_DIR/src/trail_autogen"
+    rm -rf "$BUILD_DIR/src/trail-capturable_autogen"
 fi
 
 cmake --build "$BUILD_DIR" --parallel "$(nproc)"
@@ -85,7 +85,7 @@ reload_running_effect
 echo
 echo "installed plugin:"
 for libdir in lib64 lib; do
-    installed="$PREFIX/$libdir/qt6/plugins/kwin/effects/plugins/trail.so"
+    installed="$PREFIX/$libdir/qt6/plugins/kwin/effects/plugins/trail-capturable.so"
     if [[ -f "$installed" ]]; then
         ls -l "$installed" | sed 's/^/  /'
     fi

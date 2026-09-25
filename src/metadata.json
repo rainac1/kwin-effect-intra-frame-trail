@@ -7,13 +7,13 @@
             }
         ],
         "Category": "Appearance",
-        "Description": "Renders the pointer at every position sampled during the previous frame",
-        "Description[zh_CN]": "在上一帧内采样到的每个指针位置渲染当前指针",
-        "EnabledByDefault": true,
+        "Description": "Intra-frame pointer trail, also drawn into screen captures and screencasts",
+        "Description[zh_CN]": "帧内指针尾迹，并会绘制到截图和录屏中",
+        "EnabledByDefault": false,
         "Icon": "input-mouse",
         "License": "GPL-2.0-or-later",
-        "Name": "Intra-frame Trail",
-        "Name[zh_CN]": "帧内尾迹",
+        "Name": "Intra-frame Trail (Capturable)",
+        "Name[zh_CN]": "帧内尾迹（可录制）",
         "Version": "0.1.0"
     }
 }

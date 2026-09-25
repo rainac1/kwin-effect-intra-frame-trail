@@ -5,7 +5,7 @@
 # enable-effect.sh -- switch the effect on or off for the current user, reload the
 # installed plugin, and report whether the running KWin can actually see it.
 #
-# The kwinrc value ([Plugins] trailEnabled) is what persists the choice for the next
+# The kwinrc value ([Plugins] trail-capturableEnabled) is what persists the choice for the next
 # login; it is only read at session start, so enable/disable/reload also act on the
 # running compositor over D-Bus. Use helpers/run-nested.sh for an isolated
 # environment instead.
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 action=${1:-enable}
-PLUGIN_ID=trail
+PLUGIN_ID=trail-capturable
 
 # Ask the running compositor over D-Bus. KWin exports
 # org.kde.kwin.Effects on /Effects with isEffectSupported(), isEffectLoaded(),

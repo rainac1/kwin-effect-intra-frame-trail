@@ -54,8 +54,8 @@ if [[ -z "$PLUGIN_DIR" ]]; then
     echo "error: no Qt plugin directory found under $PLUGIN_PREFIX (build and install first)" >&2
     exit 1
 fi
-if [[ ! -f "$PLUGIN_DIR/kwin/effects/plugins/trail.so" ]]; then
-    echo "warning: $PLUGIN_DIR/kwin/effects/plugins/trail.so not found;" >&2
+if [[ ! -f "$PLUGIN_DIR/kwin/effects/plugins/trail-capturable.so" ]]; then
+    echo "warning: $PLUGIN_DIR/kwin/effects/plugins/trail-capturable.so not found;" >&2
     echo "         run helpers/build.sh first" >&2
 fi
 

@@ -1,7 +1,7 @@
 # The effect plugin itself. kcoreaddons_add_plugin() builds a Qt plugin that
 # embeds metadata.json as its KPluginMetaData and installs it into the KWin
 # effect plugin namespace.
-kcoreaddons_add_plugin(trail
+kcoreaddons_add_plugin(trail-capturable
     SOURCES
         main.cpp
         traileffect.cpp
@@ -14,9 +14,9 @@ kcoreaddons_add_plugin(trail
 
 # KDE plugins are conventionally installed without the "lib" prefix, so that the
 # file name matches the plugin id.
-set_target_properties(trail PROPERTIES PREFIX "")
+set_target_properties(trail-capturable PROPERTIES PREFIX "")
 
-target_link_libraries(trail PRIVATE
+target_link_libraries(trail-capturable PRIVATE
     KWin::kwin
     Qt6::Core
     Qt6::Gui

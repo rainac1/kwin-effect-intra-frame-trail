@@ -5,6 +5,11 @@ Intra-frame trail: a KWin effect that redraws the cursor at every position sampl
 
 Not just for extreme 8000Hz mice: Even with a standard 250Hz office mouse on a 60Hz display, it quadruples the perceived cursor density, turning choppy, nauseating cursor jumping into smooth, readable motion.
 
+This is the capturable variant. It builds as the independent effect `trail-capturable`,
+with its own plugin id and `[Effect-trail-capturable]` config, so it installs next to a
+regular `trail` build instead of replacing it. It also draws the trail into screenshots
+and screencasts. It is off by default; enable it explicitly.
+
 
 Requirements
 ------------
@@ -42,12 +47,12 @@ helpers/build.sh is a wrapper around the same three commands; it takes PREFIX,
 BUILD_DIR, BUILD_TYPE and SYSROOT from the environment.
 
 Either way the plugin lands in
-~/.local/lib64/qt6/plugins/kwin/effects/plugins/trail.so
+~/.local/lib64/qt6/plugins/kwin/effects/plugins/trail-capturable.so
 
 AUTOMOC cannot see the file name inside the KWIN_EFFECT_FACTORY macro, so when you
 edit src/metadata.json the embedded metadata is not regenerated on its own:
 
-    rm -rf build/src/trail_autogen
+    rm -rf build/src/trail-capturable_autogen
 
 helpers/build.sh does that for you.
 
@@ -72,7 +77,7 @@ or tick it under System Settings -> Window Management -> Desktop Effects. To ask
 the running compositor what it sees:
 
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
-        --method org.kde.kwin.Effects.isEffectSupported trail
+        --method org.kde.kwin.Effects.isEffectSupported trail-capturable
 
 false means kwin has not picked up the environment yet; isEffectLoaded says whether
 the effect is actually loaded.
@@ -88,9 +93,9 @@ Configuration
 ~/.config/kwinrc:
 
     [Plugins]
-    trailEnabled=true
+    trail-capturableEnabled=true
 
-    [Effect-trail]
+    [Effect-trail-capturable]
     Enabled=true
     TrailFrames=1
     MaxSamples=256
@@ -115,7 +120,7 @@ Files
 Notes
 -----
 
-The plugin id is the file name, trail.so, not a field in metadata.json.
+The plugin id is the file name, trail-capturable.so, not a field in metadata.json.
 
 Screenshots and screencasts include the trail: a capture pass renders the scene into a
 target of its own and this effect draws the same snapshot into it. TRAIL_KWIN_SELFCHECK=1
