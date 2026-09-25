@@ -2,13 +2,16 @@
 # SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# enable-effect.sh -- switch the effect on or off for the current user, reload the
-# installed plugin, and report whether the running KWin can actually see it.
+# enable-effect.sh -- switch the effect on or off for the current user and report whether
+# the running KWin can actually see it.
 #
 # The kwinrc value ([Plugins] trailEnabled) is what persists the choice for the next
 # login; it is only read at session start, so enable/disable/reload also act on the
 # running compositor over D-Bus. Use helpers/run-nested.sh for an isolated
 # environment instead.
+#
+# reload re-creates the effect, but a running kwin keeps the .so it started with, so it
+# does not switch to a rebuilt plugin: that needs a new login (docs/USAGE.md).
 #
 # Usage: helpers/enable-effect.sh [enable|disable|reload|status]
 #
@@ -76,14 +79,15 @@ disable)
     report_state
     ;;
 reload)
-    # A running kwin keeps executing the mapping of the .so it loaded, so a rebuild
-    # or reinstall changes nothing until the plugin is unloaded and loaded again.
+    # Re-creates the effect from the mapping kwin already has. It does not read the
+    # .so again, so a rebuilt plugin needs a new login instead.
     if ! kwin_effects_call unloadEffect >/dev/null; then
         echo "error: could not reach the running KWin over D-Bus; nothing to reload" >&2
         exit 1
     fi
     if loaded=$(kwin_effects_call loadEffect); then
-        echo "plugin '$PLUGIN_ID' reloaded for the running session (unloadEffect + loadEffect)"
+        echo "plugin '$PLUGIN_ID' re-created for the running session (unloadEffect + loadEffect)"
+        echo "  note: this is the build kwin loaded at login, not a rebuilt .so"
         if [[ "$loaded" != "true" ]]; then
             echo "  warning: KWin reported loadEffect=$loaded" >&2
         fi
@@ -105,5 +109,5 @@ if [[ "$action" != "status" ]]; then
     echo
     echo "kwinrc is only read when the session starts, so the kwinrc value is what"
     echo "persists the choice for the next login, while the D-Bus call is what changes"
-    echo "this session. Use 'reload' after installing a rebuilt plugin."
+    echo "this session. A rebuilt plugin needs a new login; see docs/USAGE.md."
 fi

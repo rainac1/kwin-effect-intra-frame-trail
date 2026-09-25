@@ -4,8 +4,10 @@
 #
 # build.sh -- configure, build and install the effect.
 #
-# After installing, an effect that is loaded in the running session is reloaded over
-# D-Bus (unloadEffect + loadEffect), so no kwin restart is needed to run the new build.
+# Installing does not change what a running kwin executes: it keeps the .so it loaded
+# for the whole session (Qt's plugin loader caches a plugin by path, so unloadEffect +
+# loadEffect re-creates the effect from the same mapping). A rebuilt plugin only runs
+# after logging out and back in; this script says so when the effect is loaded.
 #
 # Defaults to installing into ~/.local (per the project conventions: never into
 # /usr). If a local development sysroot exists it is used automatically, so the
@@ -25,12 +27,11 @@ BUILD_TYPE=${BUILD_TYPE:-RelWithDebInfo}
 PREFIX=${PREFIX:-"$HOME/.local"}
 SYSROOT=${SYSROOT:-"$ROOT_DIR/.sysroot"}
 
-# A running kwin keeps executing the mapping of the plugin it loaded, so installing
-# a new build changes nothing until the effect is unloaded and loaded again. Do that
-# here, but only when the effect is loaded: a disabled effect should stay unloaded.
-# Never fatal -- without a session bus, or with the plugin unknown to kwin, the
+# A running kwin keeps the .so it loaded for the whole session, so installing a new
+# build changes nothing until the compositor is restarted. Say so when the effect is
+# loaded. Never fatal -- without a session bus, or with the plugin unknown to kwin, the
 # kwinrc value still applies at the next login.
-reload_running_effect() {
+warn_about_running_effect() {
     local plugin_id=trail reply
     command -v gdbus >/dev/null 2>&1 || return 0
     if ! reply=$(gdbus call --session --dest org.kde.KWin --object-path /Effects \
@@ -38,17 +39,11 @@ reload_running_effect() {
         return 0 # no running kwin on this session bus
     fi
     if [[ "$reply" != *true* ]]; then
-        return 0 # not loaded, nothing to switch over
+        return 0 # not loaded, nothing to say
     fi
-    gdbus call --session --dest org.kde.KWin --object-path /Effects \
-        --method org.kde.kwin.Effects.unloadEffect "$plugin_id" >/dev/null 2>&1 || true
-    if gdbus call --session --dest org.kde.KWin --object-path /Effects \
-        --method org.kde.kwin.Effects.loadEffect "$plugin_id" >/dev/null 2>&1; then
-        echo "reloaded '$plugin_id' in the running kwin (unloadEffect + loadEffect)"
-    else
-        echo "warning: unloaded '$plugin_id' but could not load it again;" >&2
-        echo "         it will be back at the next login" >&2
-    fi
+    echo
+    echo "note: '$plugin_id' is loaded in the running kwin, which keeps the .so it"
+    echo "      started with. Log out and back in to run this build."
 }
 
 cmake_args=(
@@ -80,7 +75,7 @@ fi
 cmake --build "$BUILD_DIR" --parallel "$(nproc)"
 cmake --install "$BUILD_DIR"
 
-reload_running_effect
+warn_about_running_effect
 
 echo
 echo "installed plugin:"
@@ -94,8 +89,7 @@ echo
 echo "next steps:"
 echo "  helpers/install-session-env.sh    # once: let KWin find plugins in ~/.local,"
 echo "                                    # then log out and back in"
-echo "  helpers/enable-effect.sh enable   # enable and load it in the current session"
-echo "  helpers/enable-effect.sh reload   # reload by hand after an install"
+echo "  helpers/enable-effect.sh enable   # enable it for the next session and load it now"
 echo "  helpers/run-nested.sh             # or try it in an isolated nested compositor"
 echo
-echo "details: docs/USAGE.md"
+echo "a rebuilt plugin runs after the next login; see docs/USAGE.md (\"Apply a rebuild\")"
