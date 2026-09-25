@@ -117,8 +117,10 @@ Notes
 
 The plugin id is the file name, trail.so, not a field in metadata.json.
 
-Screenshots and screencasts will not show the trail. TRAIL_KWIN_SELFCHECK=1 makes the
-effect read back its own pixels instead and log how many it changed.
+Screenshots and screencasts include the trail: a capture pass renders the scene into a
+target of its own and this effect draws the same snapshot into it. TRAIL_KWIN_SELFCHECK=1
+makes the effect read back its own pixels instead and log how many it changed. A window
+capture is the exception, because it renders the window directly without the effect chain.
 
 Shake Cursor magnifies the pointer on fast back-and-forth motion, which is exactly the
 motion that reveals a trail. helpers/run-nested.sh switches it off.

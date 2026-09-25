@@ -111,6 +111,15 @@ private:
      */
     bool isOutputRenderPass(LogicalOutput *screen) const;
 
+    /**
+     * Add the trail's damage for a capture pass and remember it for that view,
+     * so that the next pass into the same target repairs what this one drew.
+     *
+     * The samples themselves are not touched here: they were collected by the
+     * output pass and are only read again.
+     */
+    void prepareCaptureDamage(ScreenPrePaintData &data);
+
     /** Emit a periodic summary of the rendering work, for diagnostics. */
     void reportFrameStats(std::size_t cursorCount);
 
@@ -133,6 +142,13 @@ private:
      * view by isOutputRenderPass().
      */
     RenderView *m_currentView = nullptr;
+
+    /**
+     * Damage the trail left in a capture target last time, per view. A capture
+     * target is not the output, so its own previous trail has to be tracked and
+     * repaired separately. Entries are dropped when their view is destroyed.
+     */
+    QHash<RenderView *, Region> m_captureDamage;
 
     std::unique_ptr<GLTexture> m_cursorTexture;
     qint64 m_cursorImageKey = 0;

@@ -152,21 +152,22 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
     // chain, but into a target of their own: a screencast stream re-renders
     // every frame into a PipeWire buffer, a screenshot renders once into an
     // offscreen texture. They reach this code with the same data.screen as the
-    // output frame, but a different view.
+    // output frame, but a different view, and they draw the same trail into
+    // that target so that a capture shows what the screen showed.
     //
-    // Letting them run the code below corrupts the output frame in two ways.
-    // The sample ring is consumed (SampleRing::collect() marks everything it
-    // saw as read), so whichever pass runs first takes the samples and the
-    // output only sees the ones that arrived in between -- the trail visibly
-    // drops to the capture rate. And frame.previousDamage is shared, although
-    // the two passes draw into different buffers, so the rects recorded for one
-    // buffer are never repainted in the other and the trail that was drawn last
-    // frame stays on screen as residue.
+    // They must not run the code below, though. The sample ring is consumed
+    // (SampleRing::collect() marks everything it saw as read), so whichever
+    // pass runs first takes the samples and the output only sees the ones that
+    // arrived in between -- the trail visibly drops to the capture rate. And
+    // frame.previousDamage belongs to the output buffer; recording capture
+    // rects there would leave the trail that was drawn last frame on screen as
+    // residue, and vice versa.
     //
     // The view has to be remembered either way: paintScreen() gets no view and
     // must make the same decision.
     m_currentView = data.view;
     if (!isOutputRenderPass(data.screen)) {
+        prepareCaptureDamage(data);
         effects->prePaintScreen(data);
         return;
     }
@@ -264,22 +265,19 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     // Paint everything below the effect first, then draw on top of it.
     effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen);
 
-    // Capture passes have already delegated above and stop here: the trail must
-    // not be drawn into a capture target, both because the state below belongs
-    // to the output and because the capture's damage is tracked by its own
-    // source. See prePaintScreen().
-    if (!isOutputRenderPass(screen)) {
-        return;
-    }
-
+    // A capture pass draws the snapshot the output pass collected into its own
+    // target. Only the output pass owns frame.previousDamage; the capture's own
+    // previous trail was added to data.paint by prepareCaptureDamage().
     const auto it = m_frames.find(screen);
     if (it == m_frames.end()) {
         return;
     }
     OutputFrameState &frame = *it;
 
-    // The next frame has to repaint exactly the area painted now.
-    frame.previousDamage = frame.damage;
+    if (isOutputRenderPass(screen)) {
+        // The next frame has to repaint exactly the area painted now.
+        frame.previousDamage = frame.damage;
+    }
 
     if (!m_enabled || !effects->isOpenGLCompositing() || frame.samples.empty()) {
         return;
@@ -467,6 +465,36 @@ bool TrailEffect::isOutputRenderPass(LogicalOutput *screen) const
     }
     BackendOutput *const viewOutput = m_currentView->backendOutput();
     return viewOutput && viewOutput == screen->backendOutput();
+}
+
+void TrailEffect::prepareCaptureDamage(ScreenPrePaintData &data)
+{
+    const auto it = m_frames.constFind(data.screen);
+    if (it == m_frames.constEnd() || !data.view) {
+        // Nothing collected yet, or no view to attribute the target to.
+        return;
+    }
+    // frame.damage is already the union of the rects of the snapshot that
+    // paintScreen() is about to draw.
+    const Region current = it->damage;
+
+    RenderView *const view = data.view;
+    if (!m_captureDamage.contains(view)) {
+        // A capture view dies with its stream, or with its one-shot capture;
+        // drop the remembered damage with it.
+        connect(view, &QObject::destroyed, this, [this, view] {
+            m_captureDamage.remove(view);
+        });
+    }
+
+    // This target still holds the trail that this view drew last time -- the
+    // capture's own damage tracking does not know about it -- so that has to be
+    // repaired in the same pass.
+    const Region damage = m_captureDamage.value(view) | current;
+    m_captureDamage.insert(view, current);
+    if (!damage.isEmpty()) {
+        data.paint += damage;
+    }
 }
 
 bool TrailEffect::blocksDirectScanout() const

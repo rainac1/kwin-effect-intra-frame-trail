@@ -182,7 +182,9 @@ No kwin_effect_trail output at all:
     the plugin is not loaded; see the first two entries.
 
 Trail does not show up in a screenshot or screencast:
-    expected. Use TRAIL_KWIN_SELFCHECK=1 to verify the pixels on screen.
+    a screen or area capture draws it, because those run the effect chain. A window
+    capture does not: it renders the window item directly. Use TRAIL_KWIN_SELFCHECK=1
+    to check the pixels on screen.
 
 Pointer gets bigger while shaking it:
     Shake Cursor.

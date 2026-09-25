@@ -153,10 +153,16 @@ Coordinate spaces are the trap here.
     does not regenerate the embedded metadata. helpers/build.sh deletes the autogen
     directory when metadata.json is newer than the built plugin.
 
-2.7 Screenshots and screencasts do not include the overlay
+2.7 Screenshots and screencasts include the overlay
 
-Spectacle and a screencast show the scene without the overlay. Automated pixel
-verification therefore has to read back inside the effect (section 7).
+The capture paths render the same scene through the same effect chain, each with its own
+SceneView and its own render target (a PipeWire buffer for a screencast, an offscreen
+texture for a screenshot or the color picker). This effect draws the trail into every one
+of them, so a capture shows what the screen showed. A window capture is the exception: it
+renders the window item directly and never runs the effect chain.
+
+Because every capture target is separate from the output and from the other captures, the
+per-output damage bookkeeping cannot cover it; see section 6.2.
 
 2.8 Effects that interfere with observation
 
@@ -328,6 +334,34 @@ The fix, all three parts required:
 Invariant: frame.previousDamage equals exactly the rects drawn last frame, so
 damage = previousDamage U this frame's rects always covers every pixel ever drawn.
 
+6.2 One damage record per target
+
+The invariant above holds per render target, and a frame is not the only target the effect
+chain is asked to paint. Every capture path (screencast, screenshot, color picker, the
+screen transform) reaches prePaintScreen() and paintScreen() with the same data.screen as
+the output frame but a different view and a different buffer. The output pass alone owns
+the per-output state:
+
+    isOutputRenderPass(): view->backendOutput() == screen->backendOutput()
+
+The output's own SceneView is built around a BackendOutput (Compositor::assignOutputLayers),
+every capture view passes nullptr there. This is the same test KWin's ScreenTransformEffect
+uses to keep its offscreen capture out of its own painting.
+
+A capture pass must not collect: SampleRing::collect() consumes, so collecting there would
+take the samples from the output frame and drop the trail to the capture rate. The pass
+instead draws the snapshot the output already collected (frame.samples, with frame.damage
+as exactly its rects) into its own target. Its previous trail has to be repaired in that
+target, which the output's frame.previousDamage says nothing about, so the effect keeps a
+second damage record keyed by the capture view:
+
+    data.paint += m_captureDamage[view] U frame.damage
+    m_captureDamage[view] = frame.damage
+
+The screencast's own DamageJournal then carries the rects to whichever PipeWire buffer
+held them, and a screenshot repaints its whole target anyway. Entries are dropped when
+their view is destroyed, which is when a stream ends or a one-shot capture finishes.
+
 
 7. Verification
 ---------------
@@ -339,8 +373,7 @@ No automated tests. Verification means running it.
     WIDTH/HEIGHT come from the environment.
 
     TRAIL_KWIN_SELFCHECK=1 makes the effect glReadPixels the same region before and
-    after drawing and count the changed pixels. Captures do not include the overlay
-    (2.7), so this is the only automatic proof that pixels were written.
+    after drawing and count the changed pixels, per render pass.
 
 Measured once on a 1280x720 output with a host fractional scale of 1.75, so 2240x1260
 device pixels:
