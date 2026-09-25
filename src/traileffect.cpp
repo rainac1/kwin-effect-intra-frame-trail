@@ -9,6 +9,7 @@
 
 #include "traileffect.h"
 
+#include <kwin/core/output.h>
 #include <kwin/core/rendertarget.h>
 #include <kwin/core/renderviewport.h>
 #include <kwin/cursor.h>
@@ -20,6 +21,7 @@
 #include <kwin/opengl/glshader.h>
 #include <kwin/opengl/glshadermanager.h>
 #include <kwin/opengl/gltexture.h>
+#include <kwin/scene/scene.h>
 
 #include <KConfigGroup>
 #include <KSharedConfig>
@@ -146,6 +148,29 @@ void TrailEffect::pointerMotion(PointerMotionEvent *event)
 
 void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
 {
+    // Capture paths render the very same scene through the very same effect
+    // chain, but into a target of their own: a screencast stream re-renders
+    // every frame into a PipeWire buffer, a screenshot renders once into an
+    // offscreen texture. They reach this code with the same data.screen as the
+    // output frame, but a different view.
+    //
+    // Letting them run the code below corrupts the output frame in two ways.
+    // The sample ring is consumed (SampleRing::collect() marks everything it
+    // saw as read), so whichever pass runs first takes the samples and the
+    // output only sees the ones that arrived in between -- the trail visibly
+    // drops to the capture rate. And frame.previousDamage is shared, although
+    // the two passes draw into different buffers, so the rects recorded for one
+    // buffer are never repainted in the other and the trail that was drawn last
+    // frame stays on screen as residue.
+    //
+    // The view has to be remembered either way: paintScreen() gets no view and
+    // must make the same decision.
+    m_currentView = data.view;
+    if (!isOutputRenderPass(data.screen)) {
+        effects->prePaintScreen(data);
+        return;
+    }
+
     const Trail::TimeUs now = monotonicNowUs();
     OutputFrameState &frame = m_frames[data.screen];
 
@@ -238,6 +263,14 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
 {
     // Paint everything below the effect first, then draw on top of it.
     effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen);
+
+    // Capture passes have already delegated above and stop here: the trail must
+    // not be drawn into a capture target, both because the state below belongs
+    // to the output and because the capture's damage is tracked by its own
+    // source. See prePaintScreen().
+    if (!isOutputRenderPass(screen)) {
+        return;
+    }
 
     const auto it = m_frames.find(screen);
     if (it == m_frames.end()) {
@@ -419,6 +452,21 @@ void TrailEffect::refreshCursorShape()
 bool TrailEffect::canDraw() const
 {
     return m_enabled && m_cursorTexture && m_cursorShape.isValid();
+}
+
+bool TrailEffect::isOutputRenderPass(LogicalOutput *screen) const
+{
+    // The output's own view is the one built around a backend output;
+    // every capture view (screencast, screenshot, color picker, the
+    // scene-rendering part of the screen transform effect) passes nullptr
+    // there, so it never compares equal to screen->backendOutput(). This is the
+    // same test KWin's ScreenTransformEffect uses to keep its offscreen capture
+    // pass out of its own painting.
+    if (!m_currentView || !screen) {
+        return false;
+    }
+    BackendOutput *const viewOutput = m_currentView->backendOutput();
+    return viewOutput && viewOutput == screen->backendOutput();
 }
 
 bool TrailEffect::blocksDirectScanout() const

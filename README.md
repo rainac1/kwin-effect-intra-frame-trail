@@ -117,9 +117,8 @@ Notes
 
 The plugin id is the file name, trail.so, not a field in metadata.json.
 
-Screenshots and screencasts will not show the trail: kwin's screenshot and screencast
-paths bypass the effect chain. TRAIL_KWIN_SELFCHECK=1 makes the effect read back its
-own pixels instead and log how many it changed.
+Screenshots and screencasts will not show the trail. TRAIL_KWIN_SELFCHECK=1 makes the
+effect read back its own pixels instead and log how many it changed.
 
 Shake Cursor magnifies the pointer on fast back-and-forth motion, which is exactly the
 motion that reveals a trail. helpers/run-nested.sh switches it off.

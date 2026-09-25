@@ -100,6 +100,17 @@ private:
     /** True when this frame can actually collect and paint cursor samples. */
     bool canDraw() const;
 
+    /**
+     * True when the render pass currently being prepared draws to an actual
+     * output rather than into an offscreen capture target.
+     *
+     * Every capture path -- screencast, screenshot, color picker, the screen
+     * transform -- renders the same scene through the same effect chain, but
+     * into its own buffer and with its own RenderView. Those passes must not
+     * touch the per-output frame state; see prePaintScreen().
+     */
+    bool isOutputRenderPass(LogicalOutput *screen) const;
+
     /** Emit a periodic summary of the rendering work, for diagnostics. */
     void reportFrameStats(std::size_t cursorCount);
 
@@ -114,6 +125,14 @@ private:
 
     Trail::SampleRing m_ring;
     QHash<LogicalOutput *, OutputFrameState> m_frames;
+
+    /**
+     * View of the render pass being prepared. paintScreen() is not told which
+     * view it paints for, so prePaintScreen() records it here; the two are
+     * always called as a pair for one pass. Compared against the output's own
+     * view by isOutputRenderPass().
+     */
+    RenderView *m_currentView = nullptr;
 
     std::unique_ptr<GLTexture> m_cursorTexture;
     qint64 m_cursorImageKey = 0;

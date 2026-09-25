@@ -155,11 +155,8 @@ Coordinate spaces are the trap here.
 
 2.7 Screenshots and screencasts do not include the overlay
 
-src/plugins/screenshot/screenshotlayer.cpp and src/plugins/screencast/* render the
-scene directly (sceneView.paint(), scene->renderer()->renderItem(), plus a separate
-cursor item) and bypass the effect chain. Spectacle will never show the overlay. This
-is by design, so automated pixel verification has to read back inside the effect
-(section 7).
+Spectacle and a screencast show the scene without the overlay. Automated pixel
+verification therefore has to read back inside the effect (section 7).
 
 2.8 Effects that interfere with observation
 
@@ -342,9 +339,8 @@ No automated tests. Verification means running it.
     WIDTH/HEIGHT come from the environment.
 
     TRAIL_KWIN_SELFCHECK=1 makes the effect glReadPixels the same region before and
-    after drawing and count the changed pixels. kwin's screenshot and screencast paths
-    bypass the effect chain (2.7), so this is the only automatic proof that pixels were
-    written.
+    after drawing and count the changed pixels. Captures do not include the overlay
+    (2.7), so this is the only automatic proof that pixels were written.
 
 Measured once on a 1280x720 output with a host fractional scale of 1.75, so 2240x1260
 device pixels:

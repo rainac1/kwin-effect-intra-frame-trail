@@ -181,9 +181,8 @@ Rebuilt, but the running compositor still behaves the old way:
 No kwin_effect_trail output at all:
     the plugin is not loaded; see the first two entries.
 
-Trail does not show up in a screenshot:
-    expected. kwin's screenshot and screencast paths bypass the effect chain. Use
-    TRAIL_KWIN_SELFCHECK=1.
+Trail does not show up in a screenshot or screencast:
+    expected. Use TRAIL_KWIN_SELFCHECK=1 to verify the pixels on screen.
 
 Pointer gets bigger while shaking it:
     Shake Cursor.
