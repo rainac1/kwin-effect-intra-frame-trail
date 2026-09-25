@@ -57,7 +57,7 @@ Enable, disable, query
 
     helpers/enable-effect.sh enable     # [Plugins] trail-capturableEnabled=true, then loadEffect
     helpers/enable-effect.sh disable    # [Plugins] trail-capturableEnabled=false, then unloadEffect
-    helpers/enable-effect.sh reload     # unload + load the installed .so, kwinrc untouched
+    helpers/enable-effect.sh reload     # unload + load the effect, same build, kwinrc untouched
     helpers/enable-effect.sh status     # kwinrc value plus live D-Bus state
 
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
@@ -71,33 +71,23 @@ Loading without touching kwinrc:
         --method org.kde.kwin.Effects.loadEffect trail-capturable
 
 
-Reload after a rebuild
-----------------------
+Apply a rebuild
+---------------
 
-A running kwin keeps executing the mapping of the .so it loaded, so rebuilding and
-installing changes the file on disk but not what the compositor runs. Unload and load
-to switch to the new build, without a re-login or a compositor restart:
+A running kwin keeps the .so it loaded for the whole session. Qt's plugin loader caches a
+plugin by path, so unloadEffect + loadEffect re-creates the effect from the same mapping
+rather than reading the file again; rebuilding and installing changes the file on disk but
+not what the compositor runs.
 
-    gdbus call --session --dest org.kde.KWin --object-path /Effects \
-        --method org.kde.kwin.Effects.unloadEffect trail-capturable
-    gdbus call --session --dest org.kde.KWin --object-path /Effects \
-        --method org.kde.kwin.Effects.loadEffect trail-capturable      # returns (true,)
+    log out and back in      the only way to run a rebuilt plugin
+    helpers/build.sh         installs, then says the same
 
-helpers/build.sh does this automatically after cmake --install when the effect is
-loaded, and helpers/enable-effect.sh reload does it by hand; both leave a disabled
-effect alone.
-
-reconfigureEffect is not a reload: it calls Effect::reconfigure() on the already
-loaded instance and never re-reads the file, so it is for [Effect-trail-capturable] settings
-only. PluginEffectLoader::findEffect() asks for the plugin metadata on every call
-instead of caching it, which is why a rebuilt plugin is picked up at all: a build
-whose embedded metadata is invalid reports isEffectSupported false, and the next
-good install flips it to true with no restart. Installing over the file while the
-effect is loaded does not corrupt it: cmake's install replaces the file with a new
-inode rather than rewriting it in place (verified on this checkout), so the process
-keeps its old mapping until it is unloaded -- and that stale mapping is exactly why a
-rebuild by itself appears to do nothing. Unload first if you would rather not rely on
-that.
+reconfigureEffect is not a reload either: it calls Effect::reconfigure() on the already
+loaded instance, for [Effect-trail-capturable] settings only. Metadata is the exception:
+PluginEffectLoader::findEffect() asks for the plugin metadata on every call instead of
+caching it, so a build whose embedded metadata is invalid reports isEffectSupported false,
+and the next good install flips it back to true with no restart. That is discovery only;
+the running effect still executes the build it started with.
 
 [Plugins] trail-capturableEnabled is read when the session starts and not before: editing it,
 with kwriteconfig6 or anything else, does not load or unload a running kwin -- measured,
@@ -176,7 +166,8 @@ Listed but greyed out, log says "has not matching plugin version":
     built against a different kwin. Rebuild.
 
 Rebuilt, but the running compositor still behaves the old way:
-    it keeps the .so it loaded. unloadEffect + loadEffect; see "Reload after a rebuild".
+    it keeps the .so it loaded for the whole session. Log out and back in; see
+    "Apply a rebuild".
 
 No kwin_effect_trail_capturable output at all:
     the plugin is not loaded; see the first two entries.

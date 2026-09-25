@@ -56,9 +56,11 @@ edit src/metadata.json the embedded metadata is not regenerated on its own:
 
 helpers/build.sh does that for you.
 
-A running kwin keeps executing the build it loaded, so a rebuild alone is invisible
-until the plugin is reloaded; helpers/build.sh reloads it automatically when the
-effect is loaded, and docs/USAGE.md has the manual calls ("Reload after a rebuild").
+A running kwin keeps the .so it loaded for the whole session: Qt's plugin loader caches a
+plugin by path, so unloadEffect + loadEffect re-creates the effect from that same mapping
+instead of reading the file again. A rebuilt plugin therefore only runs in a new compositor
+process; log out and back in after cmake --install. docs/USAGE.md has the details
+("Apply a rebuild").
 
 
 Enable
