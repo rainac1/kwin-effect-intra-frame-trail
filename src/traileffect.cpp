@@ -1,6 +1,6 @@
 /*
     SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
-    SPDX-License-Identifier: GPL-2.0-or-later
+    SPDX-License-Identifier: GPL-3.0-only
 
     Renders the pointer image at every position sampled during the previous
     frame. See docs/DESIGN.md for the reasoning behind the rendering and damage

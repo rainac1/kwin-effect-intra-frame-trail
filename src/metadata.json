@@ -11,7 +11,7 @@
         "Description[zh_CN]": "在上一帧内采样到的每个指针位置渲染当前指针",
         "EnabledByDefault": true,
         "Icon": "input-mouse",
-        "License": "GPL-2.0-or-later",
+        "License": "GPL-3.0-only",
         "Name": "Intra-frame Trail",
         "Name[zh_CN]": "帧内尾迹",
         "Version": "0.1.0"

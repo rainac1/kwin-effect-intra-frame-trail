@@ -234,5 +234,8 @@ start a nested KWin instead (docs/USAGE.md, "Nested session").
 License
 -------
 
-GPL-2.0-or-later, inherited from KWin: the effect includes GPL-2.0-or-later KWin
-headers and links libkwin. See LICENSE; full text in LICENSES/GPL-2.0-or-later.txt.
+GPL-3.0-only. The effect includes KWin headers and links libkwin; both are
+GPL-2.0-or-later, whose "or later" allows the combination to be used under
+GPL-3.0. Qt6 is available under GPL-3.0 as well, so the whole work is licensed
+as GPL-3.0-only. The full text is in LICENSE, and every source file carries an
+SPDX identifier.
