@@ -5,6 +5,9 @@ Intra-frame trail: a KWin effect that redraws the cursor at every position sampl
 
 Not just for extreme 8000Hz mice: Even with a standard 250Hz office mouse on a 60Hz display, it quadruples the perceived cursor density, turning choppy, nauseating cursor jumping into smooth, readable motion.
 
+The following is a demonstration video; the right side shows the view with this KWin effect enabled.
+
+https://github.com/user-attachments/assets/b65f0f27-ce55-4336-ac58-59105d327ec2
 
 Requirements
 ------------
