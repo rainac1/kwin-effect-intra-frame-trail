@@ -9,6 +9,7 @@
 
 #include "traileffect.h"
 
+#include <kwin/core/colorspace.h>
 #include <kwin/core/output.h>
 #include <kwin/core/rendertarget.h>
 #include <kwin/core/renderviewport.h>
@@ -316,7 +317,16 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
     {
-        ShaderBinder shader(ShaderTrait::MapTexture);
+        // The cursor image is display-referred sRGB -- the same description
+        // KWin's own ImageItem gives the real pointer -- so it has to go through
+        // the scene's color pipeline before it lands in the render target. The
+        // target's color description carries the display brightness (software
+        // brightness and dimming), the night light adjustment and the SDR to HDR
+        // mapping. Uploading the texture and drawing it unmodified wrote raw sRGB
+        // into the target, which left the trail at full brightness while the rest
+        // of the screen was dimmed and made it too dark on an HDR output.
+        ShaderBinder shader(ShaderTrait::MapTexture | ShaderTrait::TransformColorspace);
+        shader.shader()->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
         for (const Trail::Sample &sample : frame.samples) {
             // One draw call per sample against a shared, cached vertex buffer.
             // Samples are ordered oldest first, so the newest cursor ends up on

@@ -218,6 +218,10 @@ Notes
 
 The plugin id is the file name, trail.so, not a field in metadata.json.
 
+The trail is color-managed: it is converted from sRGB into the output's color
+description, so it follows the display brightness, night light and HDR settings the same
+way the composited pointer does, in both SDR and HDR modes.
+
 Screenshots and screencasts will not show the trail. TRAIL_KWIN_SELFCHECK=1 makes the
 effect read back its own pixels instead and log how many it changed.
 

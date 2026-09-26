@@ -102,6 +102,15 @@ Coordinate spaces are the trap here.
     Cursor geometry, copied from scene/cursoritem.cpp to stay aligned with the real
     cursor: position - hotspot, size image.size() / devicePixelRatio().
 
+    Color management. The cursor image is display-referred sRGB: ShapeCursorSource
+    returns a theme image, and for a client-provided cursor
+    Application::cursorImage() -> grabCursorOpenGL() renders the cursor item into a
+    RenderTarget that defaults to ColorDescription::sRGB and reads it back. The scene
+    renderer converts an item from its own color description into
+    renderTarget.colorDescription() (scene/itemrenderer_opengl.cpp), so the trail has
+    to do the same or it bypasses the display brightness, night light and HDR mapping
+    that the target description carries.
+
 2.5 Textures and blending
 
     GLTexture::upload(QImage) sets the content transform to OutputTransform::FlipY and
@@ -114,6 +123,16 @@ Coordinate spaces are the trap here.
 
     The image uploads only when it changes (QImage::cacheKey()), for example when the
     pointer switches between arrow and text cursor.
+
+    Color management is part of the draw, not of the upload. The shader is
+    ShaderTrait::MapTexture | ShaderTrait::TransformColorspace and every draw sets
+    shader->setColorspaceUniforms(ColorDescription::sRGB,
+    renderTarget.colorDescription(), RenderingIntent::Perceptual), the same pattern
+    startupfeedback and offscreeneffect use. Drawing with a plain MapTexture shader
+    wrote raw sRGB into the target, so the trail ignored the display brightness:
+    CreateColorDescription() folds brightness, dimming and HDR into the output's
+    reference luminance, and only the conversion to the target's description applies
+    it. On an HDR output the untransformed write was also far too dark.
 
 2.6 Plugin contract
 
@@ -179,7 +198,10 @@ Nested sessions set shakecursorEnabled=false in their own kwinrc (section 7).
                                            +----------------v----------------+
                                            | paintScreen                     |
                                            |  effects->paintScreen(...)      |
-                                           |  ShaderBinder(MapTexture)       |
+                                           |  ShaderBinder(MapTexture        |
+                                           |    + TransformColorspace)       |
+                                           |  setColorspaceUniforms(sRGB,    |
+                                           |    target)                      |
                                            |  per sample: MVP translate, draw|
                                            |  save/restore blend state       |
                                            +---------------------------------+
