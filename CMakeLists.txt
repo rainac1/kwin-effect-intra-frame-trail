@@ -25,10 +25,9 @@ list(APPEND CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 # KDEInstallDirs supersedes GNUInstallDirs and must be included first.
 include(KDEInstallDirs)
 
-# ECM only uses the Qt-versioned plugin directory when the install prefix is the
-# same as Qt's own prefix. For a user prefix (~/.local) it would install to
-# <prefix>/lib64/plugins, but KWin looks for effects in the Qt plugin directory,
-# which is also where the project conventions expect them.
+# KWin looks for effect plugins in Qt's plugin directory, i.e. the qt6 subdirectory
+# of the library dir, not in <prefix>/<libdir>/plugins. ECM only appends the qt6
+# component when the install prefix equals Qt's own prefix, so state it explicitly.
 set(KDE_INSTALL_PLUGINDIR "${KDE_INSTALL_LIBDIR}/qt6/plugins")
 
 # Widgets and DBus are not used directly, but the imported KWin::kwin target

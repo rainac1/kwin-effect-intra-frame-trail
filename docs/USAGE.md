@@ -1,29 +1,26 @@
 Usage
 =====
 
-Discovery, enabling and troubleshooting. Building is in the README; design and API
-research is in DESIGN.md.
+Discovery, enabling and troubleshooting. Building and installing is in the README;
+design and API research is in DESIGN.md.
 
 
 How kwin finds the plugin
 -------------------------
 
 kwin discovers binary effects with KPluginMetaData::findPlugins("kwin/effects/plugins"),
-which searches Qt's plugin paths. Qt's defaults are the system directories only
-(/usr/lib64/qt6/plugins on Fedora), so a plugin under ~/.local stays invisible until
-QT_PLUGIN_PATH includes it.
+which searches Qt's plugin paths. Qt's defaults are the system directories, so an
+install under /usr is found with no environment variable:
 
-    /usr/lib64/qt6/plugins/...          found by default; distro packaging, needs root
-    ~/.local/lib64/qt6/plugins/...      needs QT_PLUGIN_PATH
+    /usr/lib64/qt6/plugins/kwin/effects/plugins/trail.so             Fedora
+    /usr/lib/x86_64-linux-gnu/qt6/plugins/kwin/effects/plugins/...   Debian/Ubuntu
+
+This is why the README installs with -DCMAKE_INSTALL_PREFIX=/usr. Qt does not search
+/usr/local, so a plugin installed there (the plain `cmake ..` default) stays invisible
+even though `sudo make install` reported success.
 
 ~/.local/share/kwin/effects/ is for scripted/QML effects (KPackage). Binary plugins do
 not go there.
-
-Plasma 6 starts kwin from a systemd user unit, so the variable belongs in
-~/.config/environment.d/ and is read at login:
-
-    helpers/install-session-env.sh
-    systemctl --user show-environment | grep QT_PLUGIN_PATH
 
 The plugin id is its file name, trail.so. That is why the target is built without the
 lib prefix and why the kwinrc switch is [Plugins] trailEnabled.
@@ -55,20 +52,33 @@ instantiated inside the compositor process, unsandboxed. Test in a nested sessio
 Enable, disable, query
 ----------------------
 
-    helpers/enable-effect.sh enable     # [Plugins] trailEnabled=true, then loadEffect
-    helpers/enable-effect.sh disable    # [Plugins] trailEnabled=false, then unloadEffect
-    helpers/enable-effect.sh reload     # unload + load the effect, same build, kwinrc untouched
-    helpers/enable-effect.sh status     # kwinrc value plus live D-Bus state
+kwinrc persists the choice for the next session; the D-Bus calls change the running one:
 
+    # enable
+    kwriteconfig6 --file kwinrc --group Plugins --key trailEnabled true
+    gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.loadEffect trail
+
+    # disable
+    kwriteconfig6 --file kwinrc --group Plugins --key trailEnabled false
+    gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.unloadEffect trail
+
+    # re-create the effect without touching kwinrc (same build)
+    gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.unloadEffect trail
+    gdbus call --session --dest org.kde.KWin --object-path /Effects \
+        --method org.kde.kwin.Effects.loadEffect trail
+
+    # query
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
         --method org.kde.kwin.Effects.isEffectSupported trail
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
         --method org.kde.kwin.Effects.isEffectLoaded trail
 
-Loading without touching kwinrc:
-
-    gdbus call --session --dest org.kde.KWin --object-path /Effects \
-        --method org.kde.kwin.Effects.loadEffect trail
+The same switch is the "Intra-frame Trail" checkbox under System Settings -> Window
+Management -> Desktop Effects, whose Apply button makes the loadEffect/unloadEffect call
+for you.
 
 
 Apply a rebuild
@@ -80,7 +90,6 @@ rather than reading the file again; rebuilding and installing changes the file o
 not what the compositor runs.
 
     log out and back in      the only way to run a rebuilt plugin
-    helpers/build.sh         installs, then says the same
 
 reconfigureEffect is not a reload either: it calls Effect::reconfigure() on the already
 loaded instance, for [Effect-trail] settings only. Metadata is the exception:
@@ -89,15 +98,30 @@ caching it, so a build whose embedded metadata is invalid reports isEffectSuppor
 and the next good install flips it back to true with no restart. That is discovery only;
 the running effect still executes the build it started with.
 
-[Plugins] trailEnabled is read when the session starts and not before: editing it,
-with kwriteconfig6 or anything else, does not load or unload a running kwin -- measured,
-no change after six seconds either way. helpers/enable-effect.sh therefore writes it
-for the next login and then makes the change happen now with loadEffect/unloadEffect.
+`qdbus org.kde.KWin /KWin reconfigure` does not reset the plugin cache either. It reaches
+Workspace::slotReconfigure(), which reparses the config, updates Options and reloads the
+window rules; it never calls the effect loader. The only caller of
+EffectLoader::queryAndLoadAll() is EffectsHandler::reconfigure(), which runs once, from the
+EffectsHandler constructor at session start. Even that would not re-read a loaded .so:
+PluginEffectLoader::loadEffect() returns early while the name is in m_loadedEffects, and
+PluginEffectLoader::clear() is an empty function.
 
-This needs the running kwin to already have the user plugin directory on Qt's path
-(helpers/install-session-env.sh, then one login). A process cannot gain a plugin path
-at runtime; if isEffectSupported is false for that reason, only a re-login or
-helpers/run-nested.sh helps.
+[Plugins] trailEnabled persists the choice for the next session. A plain kwriteconfig6 edit
+does not load or unload a running kwin -- measured, no change after six seconds either way.
+KConfig only emits the org.kde.kconfig.notify D-Bus signal for entries written with the
+KConfig::Notify flag, and EffectsHandler::configChanged (the live load/unload hook, connected
+to KConfigWatcher) is driven by that signal. kwriteconfig6 sets the flag only with --notify,
+so either pass it:
+
+    kwriteconfig6 --file kwinrc --group Plugins --key trailEnabled true --notify
+
+or write kwinrc for the next login and use loadEffect/unloadEffect for the running session,
+which is also what the Desktop Effects Apply button does.
+
+That live call needs the running kwin to have the plugin on Qt's plugin path. A system-wide
+install under /usr is already there. A process cannot gain a plugin path at runtime, so a
+plugin installed under /usr/local only helps after it is reinstalled into /usr (or tried in
+a nested session, below).
 
 
 Configuration
@@ -122,42 +146,60 @@ TrailFrames=1 gives a trail exactly one frame long: flick the pointer to see it.
 Uninstall
 ---------
 
-    helpers/enable-effect.sh disable
-    helpers/install-session-env.sh --remove      # applies at next login
-    rm -f ~/.local/lib64/qt6/plugins/kwin/effects/plugins/trail.so
+    kwriteconfig6 --file kwinrc --group Plugins --key trailEnabled false
+    sudo rm /usr/lib64/qt6/plugins/kwin/effects/plugins/trail.so
+
+Adjust the path for the distribution (see "How kwin finds the plugin"), and log out and
+back in so the removed plugin is not loaded from a stale session. The effect's settings
+stay in ~/.config/kwinrc under [Effect-trail]; remove that group with kwriteconfig6 if
+you want them gone.
 
 
 Nested session
 --------------
 
 An isolated kwin with its own D-Bus, config, cache and socket, drawn into a window on
-the current desktop.
+the current desktop, is the safe way to try a build whose ABI may not match: a bad plugin
+can crash the compositor process, and this keeps that out of the real session.
 
-    helpers/run-nested.sh
+    RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp}/trail-nested
+    mkdir -p "$RUNTIME_DIR/config" "$RUNTIME_DIR/cache"
+    cat > "$RUNTIME_DIR/config/kwinrc" <<'EOF'
+    [Plugins]
+    trailEnabled=true
+    shakecursorEnabled=false
+
+    [Effect-trail]
+    Enabled=true
+    TrailFrames=1
+    MaxSamples=256
+    EOF
+    XDG_CONFIG_HOME="$RUNTIME_DIR/config" \
+    XDG_CACHE_HOME="$RUNTIME_DIR/cache" \
+    QT_LOGGING_RULES="kwin_effect_trail.debug=true" \
+        dbus-run-session kwin_wayland \
+            --socket wayland-dev --width 1280 --height 720 konsole
+
     WAYLAND_DISPLAY=wayland-dev dolphin          # attach another client
 
 Never run kwin_wayland --replace or restart the display manager in the host session;
-that is how the desktop goes black and windows are lost. The nested instance picks up
-the plugin immediately because it exports QT_PLUGIN_PATH itself, which a real session
-only gets from a re-login.
-
-Environment: TRAIL_FRAMES, CLIENT (empty for none), WIDTH, HEIGHT, DURATION, SOCKET,
-RUNTIME_DIR, PLUGIN_PREFIX.
+that is how the desktop goes black and windows are lost. The nested instance picks up the
+system-wide plugin directly, without touching the real session and without a re-login.
 
 
 Logs
 ----
 
     journalctl --user -u plasma-kwin_wayland -f | grep kwin_effect_trail
-    QT_LOGGING_RULES="kwin_effect_trail.debug=true" CLIENT=konsole helpers/run-nested.sh
+    QT_LOGGING_RULES="kwin_effect_trail.debug=true" dbus-run-session kwin_wayland ...
 
 
 Problems
 --------
 
 Effect missing from Desktop Effects, isEffectSupported false:
-    Qt's plugin paths do not include ~/.local. Run helpers/install-session-env.sh and
-    log back in.
+    the plugin is not on Qt's plugin path. Reinstall with
+    -DCMAKE_INSTALL_PREFIX=/usr; Qt does not search /usr/local.
 
 isEffectSupported true, but nothing is drawn:
     [Effect-trail] Enabled is false, or the session is not compositing with OpenGL.

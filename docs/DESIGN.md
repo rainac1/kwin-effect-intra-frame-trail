@@ -145,13 +145,13 @@ Coordinate spaces are the trap here.
     up in the list with isEffectSupported() false.
 
     kcoreaddons_add_plugin installs into ${KDE_INSTALL_PLUGINDIR}/kwin/effects/plugins.
-    ECM only uses the qt6 subdirectory when the prefix equals Qt's prefix, so a user
-    prefix needs KDE_INSTALL_PLUGINDIR=${KDE_INSTALL_LIBDIR}/qt6/plugins explicitly to
-    land in ~/.local/lib64/qt6/plugins/kwin/effects/plugins/.
+    ECM only appends the qt6 component when the prefix equals Qt's prefix, so the
+    project sets KDE_INSTALL_PLUGINDIR=${KDE_INSTALL_LIBDIR}/qt6/plugins explicitly to
+    land in /usr/lib64/qt6/plugins/kwin/effects/plugins/.
 
     AUTOMOC cannot see the JSON file name inside the macro, so editing metadata.json
-    does not regenerate the embedded metadata. helpers/build.sh deletes the autogen
-    directory when metadata.json is newer than the built plugin.
+    does not regenerate the embedded metadata; delete build/src/trail_autogen when
+    metadata.json is newer than the built plugin.
 
 2.7 Screenshots and screencasts do not include the overlay
 
@@ -162,7 +162,7 @@ verification therefore has to read back inside the effect (section 7).
 
 shakecursor is enabled by default (EnabledByDefault: true) and magnifies the pointer
 during fast back-and-forth motion, which is exactly the motion that reveals a trail.
-Nested sessions set shakecursorEnabled=false; helpers/run-nested.sh does it.
+Nested sessions set shakecursorEnabled=false in their own kwinrc (section 7).
 
 
 3. Architecture
@@ -334,9 +334,9 @@ damage = previousDamage U this frame's rects always covers every pixel ever draw
 
 No automated tests. Verification means running it.
 
-    helpers/run-nested.sh starts an isolated nested kwin with its own D-Bus, config and
-    socket, host untouched, logs on the terminal. TRAIL_FRAMES, CLIENT and
-    WIDTH/HEIGHT come from the environment.
+    A nested kwin_wayland under dbus-run-session with its own XDG_CONFIG_HOME and
+    QT_LOGGING_RULES starts an isolated compositor with its own D-Bus, config and
+    socket, host untouched, logs on the terminal (docs/USAGE.md, "Nested session").
 
     TRAIL_KWIN_SELFCHECK=1 makes the effect glReadPixels the same region before and
     after drawing and count the changed pixels. Captures do not include the overlay
@@ -371,8 +371,8 @@ Three things to check against it:
     TrailFrames   default 1       frame intervals of samples to keep
     MaxSamples    default 256     per-frame cursor cap
 
-Enabling the effect itself: [Plugins] trailEnabled=true, or
-helpers/enable-effect.sh enable.
+Enabling the effect itself: [Plugins] trailEnabled=true plus a loadEffect D-Bus call,
+or the checkbox under System Settings -> Window Management -> Desktop Effects.
 
 
 9. Known limits and future work

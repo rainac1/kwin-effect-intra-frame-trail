@@ -6,6 +6,6 @@
 /.sysroot/
 /.tools/
 
-# Local install prefix and nested session state (see helpers/run-nested.sh)
+# Local scratch (nested session state, throwaway install prefixes)
 /.local/
 /.runtime/
