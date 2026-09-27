@@ -75,24 +75,22 @@ plugin for 6.7.5 (see "Pitfalls").
 --------------------------------
 
 The install prefix must be /usr, the same prefix as the system Qt. KWin searches the Qt
-plugin directories, which do not include /usr/local, so a plain `cmake ..` installs to a
-location KWin never scans and the effect stays invisible in System Settings.
+plugin directories, which do not include /usr/local, so a build configured without a
+prefix installs to a location KWin never scans and the effect stays invisible in System
+Settings.
 
     # 1. get the source
     git clone https://github.com/rainac1/kwin-effect-intra-frame-trail.git
     cd kwin-effect-intra-frame-trail
 
-    # 2. create and enter a build directory
-    mkdir build && cd build
+    # 2. configure (the prefix must be /usr)
+    cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
 
-    # 3. configure CMake (the prefix must be /usr)
-    cmake .. -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
+    # 3. build
+    cmake --build build -j"$(nproc)"
 
-    # 4. compile
-    make -j"$(nproc)"
-
-    # 5. install into the system (needs root)
-    sudo make install
+    # 4. install into the system (needs root)
+    sudo cmake --install build
 
 Installation places the compiled .so in Qt's KWin effect directory, for example
 /usr/lib64/qt6/plugins/kwin/effects/plugins/trail.so on Fedora or
@@ -143,7 +141,7 @@ Apply a rebuild
 Installing a new build does not change what a running KWin executes. Qt's plugin loader
 caches a plugin by path, so unloadEffect + loadEffect re-creates the effect from the
 same mapping instead of reading the file again. A rebuilt .so therefore only runs in a
-new compositor process: log out and back in after `sudo make install`.
+new compositor process: log out and back in after `sudo cmake --install build`.
 `qdbus org.kde.KWin /KWin reconfigure` does not reset that cache and does not reload the
 plugin; it never calls the effect loader at all.
 
@@ -171,10 +169,10 @@ Pitfalls
 
 3. The install prefix trap.
 
-   A plain `cmake ..` defaults to /usr/local, and KWin's plugin search covers the system
-   Qt plugin directories under /usr, not /usr/local. `sudo make install` succeeds but the
-   effect never appears in Desktop Effects. Always pass
-   -DCMAKE_INSTALL_PREFIX=/usr.
+   A build configured without `-DCMAKE_INSTALL_PREFIX=/usr` defaults to /usr/local, and
+   KWin's plugin search covers the system Qt plugin directories under /usr, not
+   /usr/local. `sudo cmake --install build` succeeds but the effect never appears in
+   Desktop Effects. Always pass -DCMAKE_INSTALL_PREFIX=/usr.
 
 4. The compositor keeps the .so it started with.
 

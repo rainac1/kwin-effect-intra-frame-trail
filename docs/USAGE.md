@@ -15,9 +15,9 @@ install under /usr is found with no environment variable:
     /usr/lib64/qt6/plugins/kwin/effects/plugins/trail.so             Fedora
     /usr/lib/x86_64-linux-gnu/qt6/plugins/kwin/effects/plugins/...   Debian/Ubuntu
 
-This is why the README installs with -DCMAKE_INSTALL_PREFIX=/usr. Qt does not search
-/usr/local, so a plugin installed there (the plain `cmake ..` default) stays invisible
-even though `sudo make install` reported success.
+This is why the README configures with -DCMAKE_INSTALL_PREFIX=/usr. Qt does not search
+/usr/local, so a plugin installed there (the default of a build configured without a
+prefix) stays invisible even though `sudo cmake --install build` reported success.
 
 ~/.local/share/kwin/effects/ is for scripted/QML effects (KPackage). Binary plugins do
 not go there.
