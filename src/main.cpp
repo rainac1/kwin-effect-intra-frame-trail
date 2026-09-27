@@ -1,8 +1,3 @@
-/*
-    SPDX-FileCopyrightText: 2026 Trail KWin Effect contributors
-    SPDX-License-Identifier: GPL-3.0-only
-*/
-
 #include "traileffect.h"
 
 #include <kwin/effect/effecthandler.h>

@@ -243,11 +243,24 @@ how the desktop goes black and windows are lost. To try a freshly built plugin s
 start a nested KWin instead (docs/USAGE.md, "Nested session").
 
 
+Author
+------
+
+rainac1 <rainandcap@gmail.com> -- design, implementation and packaging.
+
+The KWin effect API and the headers this plugin builds against are the work of the KDE
+community and are used here, not claimed. Third-party reference checkouts (KWin sources
+and headers, kept out of the repository) keep their own copyright notices.
+
+
 License
 -------
+
+Copyright (C) 2026 rainac1 <rainandcap@gmail.com>
 
 GPL-3.0-only. The effect includes KWin headers and links libkwin; both are
 GPL-2.0-or-later, whose "or later" allows the combination to be used under
 GPL-3.0. Qt6 is available under GPL-3.0 as well, so the whole work is licensed
-as GPL-3.0-only. The full text is in LICENSE, and every source file carries an
-SPDX identifier.
+as GPL-3.0-only. The full text is in LICENSE. The grant is version 3 only, not
+"or any later version": the "or later" wording inside LICENSE belongs to the
+FSF's sample notice for applying the license, not to this project.
