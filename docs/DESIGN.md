@@ -354,6 +354,26 @@ The fix, all three parts required:
 Invariant: frame.previousDamage equals exactly the rects drawn last frame, so
 damage = previousDamage U this frame's rects always covers every pixel ever drawn.
 
+6.2 The trail has to schedule its own erasing frame
+
+The trail is drawn after effects->paintScreen(), on top of the scene, so the only thing
+that removes it again is a later frame repainting the region it was drawn into. While the
+pointer moves that happens by itself: every motion event calls addRepaint() for the new
+cursor rect, and the frame it triggers repaints frame.previousDamage as well.
+
+When the pointer stops, no further motion event arrives. The frame that the last one
+scheduled paints the trail, and nothing else produces damage afterwards - the compositor
+is damage driven, and even the blocksDirectScanout() flip that ends the trail needs a
+frame before it can be evaluated. The last copy is drawn exactly where the real pointer
+is, so it composites over it and stays on screen as a bright edge around the pointer
+until something unrelated repaints that area.
+
+paintScreen() therefore calls effects->addRepaint(frame.damage) after drawing. The next
+frame collects no samples, so prePaintScreen() puts frame.previousDamage into data.paint
+and paintScreen() returns before drawing, which erases the trail; no further repaint is
+requested, so the effect does not keep rendering on its own. The request is only made
+when a trail was really drawn, so a still pointer costs exactly one extra frame.
+
 
 7. Verification
 ---------------
@@ -445,3 +465,16 @@ or the checkbox under System Settings -> Window Management -> Desktop Effects.
 7. TRAIL_KWIN_SELFCHECK stays in the code, off by default, the environment read once at
    construction. It is the only automatic way to verify overlay pixels, at the cost of
    a synchronous glReadPixels stall.
+
+8. The newest sample is still drawn where the real pointer is, so its copy is composited
+   over the pointer and can leave a faint bright edge while the pointer moves. Removing
+   it fully means never painting where the pointer paints, which needs a per-pixel mask
+   of the cursor alpha. A square scissor around the pointer is not that mask: the
+   bounding box of a cursor image is mostly transparent, so it also cuts away trail that
+   should stay visible. A GL stencil mask is not available either, because the scene's
+   framebuffers are created without a stencil attachment
+   (GLFramebuffer::Attachment::CombinedDepthStencil is only used for offscreen QPA
+   targets). The remaining option is a custom fragment shader that samples the cursor
+   alpha as a mask, which would have to reproduce the TransformColorspace part of KWin's
+   base.frag, or a scissor region built from the cursor's opaque spans, which turns every
+   overlapping sample into tens of draw calls. Neither was taken.

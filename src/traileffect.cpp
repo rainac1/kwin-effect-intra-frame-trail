@@ -377,6 +377,18 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
         glDisable(GL_BLEND);
     }
 
+    // The trail sits on top of the scene, so it disappears only when a later
+    // frame repaints the region it was drawn into. While the pointer moves,
+    // every motion event schedules such a frame anyway. Once it stops, nothing
+    // else produces damage, and the last copy -- which lies on the real pointer
+    // and already overdraws it once -- would stay on screen as a bright edge
+    // until something unrelated repaints that area. Ask for that frame here:
+    // the next paint collects no samples, repaints frame.previousDamage and
+    // stops, because this request is only made when a trail was really drawn.
+    if (!frame.damage.isEmpty()) {
+        effects->addRepaint(frame.damage);
+    }
+
     selfCheckAfter();
     reportFrameStats(frame.samples.size());
 }

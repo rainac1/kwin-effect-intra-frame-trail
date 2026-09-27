@@ -220,6 +220,12 @@ The trail is color-managed: it is converted from sRGB into the output's color
 description, so it follows the display brightness, night light and HDR settings the same
 way the composited pointer does, in both SDR and HDR modes.
 
+The effect keeps one repaint scheduled while a trail is on screen. The trail is drawn on
+top of the scene, so it only disappears when a later frame repaints the region it was
+drawn into; while the pointer moves, the motion events schedule those frames anyway, but
+once it stops nothing else produces damage and the last copy would stay behind as a
+bright edge around the pointer.
+
 Screenshots and screencasts will not show the trail. TRAIL_KWIN_SELFCHECK=1 makes the
 effect read back its own pixels instead and log how many it changed.
 
