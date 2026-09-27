@@ -225,6 +225,10 @@ way the composited pointer does, in both SDR and HDR modes.
 Screenshots and screencasts will not show the trail. TRAIL_KWIN_SELFCHECK=1 makes the
 effect read back its own pixels instead and log how many it changed.
 
+Every output gets the trail, including on multi-monitor and mixed-scaling desks: each
+output has its own sample buffer and damage, so one monitor being painted first no
+longer consumes the samples of the others.
+
 Shake Cursor magnifies the pointer on fast back-and-forth motion, which is exactly the
 motion that reveals a trail:
 

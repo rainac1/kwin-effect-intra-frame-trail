@@ -77,8 +77,12 @@ Rect toIntRect(const QRectF &rect)
 
 } // namespace
 
+TrailEffect::OutputFrameState::OutputFrameState()
+    : ring(kRingCapacity)
+{
+}
+
 TrailEffect::TrailEffect()
-    : m_ring(kRingCapacity)
 {
     // KWin's only way to observe individual pointer samples: it broadcasts the
     // current position but keeps no history, so we collect it ourselves. The
@@ -95,6 +99,17 @@ TrailEffect::TrailEffect()
         m_cursorDirty = true;
     });
 
+    // One sample buffer and one frame state per output. The pointer is a single
+    // global device, so every output has to observe the same samples, but each
+    // one consumes them in its own paint pass and keeps its own damage.
+    const auto addScreen = [this](LogicalOutput *screen) {
+        m_frames.try_emplace(screen);
+    };
+    connect(effects, &EffectsHandler::screenAdded, this, addScreen);
+    connect(effects, &EffectsHandler::screenRemoved, this, [this](LogicalOutput *screen) {
+        m_frames.erase(screen);
+    });
+
     m_selfCheck = qEnvironmentVariableIntValue("TRAIL_KWIN_SELFCHECK") == 1;
     reconfigure(ReconfigureAll);
 }
@@ -108,7 +123,14 @@ void TrailEffect::reconfigure(ReconfigureFlags flags)
     const KConfigGroup config = KSharedConfig::openConfig()->group(QStringLiteral("Effect-trail"));
     m_enabled = config.readEntry("Enabled", true);
     m_trailFrames = std::clamp(config.readEntry("TrailFrames", 1), 1, kMaxTrailFrames);
-    m_maxSamples = std::clamp(config.readEntry("MaxSamples", kDefaultMaxSamples), 1, int(m_ring.capacity()));
+    m_maxSamples = std::clamp(config.readEntry("MaxSamples", kDefaultMaxSamples), 1, int(kRingCapacity));
+
+    // Outputs that already exist must have a buffer before the first motion
+    // event, otherwise the first frame after enabling would have nothing to
+    // draw. screenAdded() covers outputs that appear later.
+    for (LogicalOutput *screen : effects->screens()) {
+        m_frames.try_emplace(screen);
+    }
 
     if (m_enabled) {
         effects->addRepaintFull();
@@ -136,7 +158,13 @@ void TrailEffect::pointerMotion(PointerMotionEvent *event)
         .y = float(event->position.y()),
         .time = time,
     };
-    m_ring.push(sample);
+
+    // The position is global, so every output keeps its own copy of the same
+    // sample and decides for itself which part of it lands on its viewport.
+    for (auto &[screen, frame] : m_frames) {
+        Q_UNUSED(screen)
+        frame.ring.push(sample);
+    }
     m_lastSampleUs = now;
 
     // KWin repaints when the cursor moves, but the cursor may be rendered on a
@@ -173,7 +201,7 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
     }
 
     const Trail::TimeUs now = monotonicNowUs();
-    OutputFrameState &frame = m_frames[data.screen];
+    OutputFrameState &frame = m_frames.try_emplace(data.screen).first->second;
 
     // The cursor image has to be up to date *before* the damage region is
     // computed, because the damage has to describe exactly what is going to be
@@ -195,6 +223,11 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
         m_cursorDirty = false;
     }
 
+    // Snapshot the geometry together with the samples, so that the draw in
+    // paintScreen() uses exactly the geometry this damage was computed from --
+    // even if another pass refreshes the cursor in between.
+    frame.cursorShape = m_cursorShape;
+
     // Only take samples out of the ring when they can actually be drawn. If the
     // cursor image is momentarily unavailable, the samples stay buffered and
     // are picked up by the next frame instead of being dropped silently.
@@ -214,7 +247,7 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
         // was added to the damage region, so nothing is drawn outside the
         // damaged area and nothing needs to be redrawn later.
         frame.samples.resize(std::size_t(m_maxSamples));
-        const std::size_t count = m_ring.collect(since, frame.samples.data(), std::size_t(m_maxSamples));
+        const std::size_t count = frame.ring.collect(since, frame.samples.data(), std::size_t(m_maxSamples));
         frame.samples.resize(count);
 
         // The window continues from the newest sample that was actually drawn,
@@ -236,7 +269,7 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
     Region damage = frame.previousDamage;
     frame.damage = Region();
     for (const Trail::Sample &sample : frame.samples) {
-        frame.damage += toIntRect(Trail::cursorRect(sample, m_cursorShape));
+        frame.damage += toIntRect(Trail::cursorRect(sample, frame.cursorShape));
     }
     damage |= frame.damage;
     if (!damage.isEmpty()) {
@@ -277,7 +310,7 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     if (it == m_frames.end()) {
         return;
     }
-    OutputFrameState &frame = *it;
+    OutputFrameState &frame = it->second;
 
     // The next frame has to repaint exactly the area painted now.
     frame.previousDamage = frame.damage;
@@ -289,18 +322,18 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     // prePaintScreen() refreshed the cursor image before computing the damage
     // and only collected samples when they can be drawn, so the geometry here is
     // the same one the damage was computed from.
-    if (!m_cursorTexture || !m_cursorShape.isValid()) {
+    if (!m_cursorTexture || !frame.cursorShape.isValid()) {
         return;
     }
 
     // Samples are in logical coordinates; the projection matrix maps device
     // pixels, so scale before drawing.
     const double scale = viewport.scale();
-    const QSizeF deviceSize = m_cursorShape.size * scale;
+    const QSizeF deviceSize = frame.cursorShape.size * scale;
     if (deviceSize.isEmpty()) {
         return;
     }
-    const QPointF deviceHotspot = m_cursorShape.hotspot * scale;
+    const QPointF deviceHotspot = frame.cursorShape.hotspot * scale;
     const QMatrix4x4 projection = viewport.projectionMatrix();
 
     selfCheckBefore(frame.damage, scale, renderTarget.size());
@@ -517,12 +550,18 @@ void TrailEffect::reportFrameStats(std::size_t cursorCount)
         return;
     }
 
+    std::uint64_t dropped = 0;
+    for (const auto &[screen, frame] : m_frames) {
+        Q_UNUSED(screen)
+        dropped += frame.ring.droppedSamples();
+    }
+
     const double seconds = double(now - m_statsSince) / 1'000'000.0;
     qCDebug(TRAIL) << "trail stats:"
                    << double(m_statsCursors) / seconds << "cursors/s,"
                    << double(m_statsFrames) / seconds << "frames/s,"
                    << double(m_statsCursors) / std::max<std::uint64_t>(1, m_statsFrames) << "cursors/frame,"
-                   << m_ring.droppedSamples() << "dropped in total";
+                   << dropped << "dropped in total";
 
     m_statsSince = now;
     m_statsFrames = 0;

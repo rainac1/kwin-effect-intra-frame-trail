@@ -187,12 +187,12 @@ Nested sessions set shakecursorEnabled=false in their own kwinrc (section 7).
 3. Architecture
 ---------------
 
-    input/main thread                          main thread, once per frame
+    input/main thread                          main thread, once per frame, per output
     +----------------------+               +---------------------------------+
     | InputEventSpy        |  push, O(1)   | prePaintScreen                  |
     | pointerMotion(event) | ------------> |  snapshot by time window        |
     |  position            |  lock-free    |  damage = prev frame U this one |
-    |  timestamp           |  ring, 1024   |  data.paint += damage (logical) |
+    |  timestamp           |  ring per out |  data.paint += damage (logical) |
     +----------------------+               +----------------+----------------+
                                                             |
                                            +----------------v----------------+
@@ -205,6 +205,10 @@ Nested sessions set shakecursorEnabled=false in their own kwinrc (section 7).
                                            |  per sample: MVP translate, draw|
                                            |  save/restore blend state       |
                                            +---------------------------------+
+
+    Every output is painted in its own pass, with its own viewport, scale and
+    damage region, so every output owns a SampleRing and an OutputFrameState
+    instead of sharing one. pointerMotion() feeds all of them.
 
     src/trailsample.{h,cpp}   sample struct, ring buffer, cursor rect geometry.
                               No KWin or GL dependencies, unit-testable.
@@ -400,9 +404,17 @@ or the checkbox under System Settings -> Window Management -> Desktop Effects.
 9. Known limits and future work
 -------------------------------
 
-1. Multiple outputs. Logical and device coordinates are already handled per output
-   (QHash<LogicalOutput*, OutputFrameState> holds each output's snapshot, damage and
-   frame interval), but multi-monitor and mixed-scaling setups are untested.
+1. Multiple outputs. Every output owns its own sample buffer, damage and frame
+   interval (std::map<LogicalOutput*, OutputFrameState>), because KWin paints each
+   output in its own pass with its own viewport, scale and damage region. A single
+   shared ring let the output that happened to be painted first consume the samples
+   of all the others, so only one monitor ever showed a trail. pointerMotion() pushes
+   each sample into every known output's ring, entries are created in reconfigure()
+   and on screenAdded(), and removed on screenRemoved(). Mixed-scaling setups still
+   use one cursor texture, so a trail on an output whose scale differs from the one
+   the pointer is on is drawn with that output's scale but from a texture grabbed for
+   the pointer's output; the geometry is correct, only the sampling resolution is not
+   always optimal.
 
 2. Draw call count. One draw call per sample, sharing a static VBO and one texture. At
    very high sample rates this can collapse into a single draw call with a custom
@@ -420,6 +432,16 @@ or the checkbox under System Settings -> Window Management -> Desktop Effects.
    kwin/cursor.h; it and effects->cursorImage() are installed headers, but a kwin
    change means a coordinated update.
 
-6. TRAIL_KWIN_SELFCHECK stays in the code, off by default, the environment read once at
+6. Bottom edge with Edge in fullscreen on a fractional scale. The effect has to block
+   direct scanout for the scene to be composited at all, which also pulls the pointer
+   off the hardware cursor plane. When the trail ends, KWin can hand the primary plane
+   back to the fullscreen client's buffer; at a fractional scale that buffer can be one
+   device row short of the output, and the row it does not cover keeps the composited
+   pointer's white edge from the frame before. It reproduces with Edge in fullscreen on
+   a 175% output and not with Chrome, Ghostty or QQ, so it is the client's buffer size,
+   not the effect's drawing. Not worked around: keeping scanout blocked longer was
+   tried and did not remove it.
+
+7. TRAIL_KWIN_SELFCHECK stays in the code, off by default, the environment read once at
    construction. It is the only automatic way to verify overlay pixels, at the cost of
    a synchronous glReadPixels stall.

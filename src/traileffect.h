@@ -10,10 +10,10 @@
 #include <kwin/effect/effect.h>
 #include <kwin/input_event_spy.h>
 
-#include <QHash>
 #include <QImage>
 #include <QSizeF>
 
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -37,6 +37,11 @@ class GLTexture;
  * both the sampling callback and the frame painting are driven by KWin's event
  * loop, which is what keeps the latency at one frame without any cross-thread
  * hand-off.
+ *
+ * Every output owns its own sample buffer and frame state. The pointer is a
+ * single global device, but each output is painted in its own pass with its own
+ * viewport, scale and damage region; sharing one buffer would let whichever
+ * output happens to be painted first consume the samples of all the others.
  */
 class TrailEffect : public Effect, public InputEventSpy
 {
@@ -60,11 +65,29 @@ public:
     void pointerMotion(PointerMotionEvent *event) override;
 
 private:
-    /** Per output painting state; KWin paints each output in its own pass. */
+    /**
+     * Per output painting state; KWin paints each output in its own pass, with
+     * its own sample buffer, viewport and damage accounting.
+     */
     struct OutputFrameState
     {
+        OutputFrameState();
+
+        /**
+         * Samples produced since the last frame that was actually drawn by this
+         * output. Per output, because one composited frame of one output
+         * consumes every sample it sees.
+         */
+        Trail::SampleRing ring;
         /** Samples selected for the frame currently being painted. */
         std::vector<Trail::Sample> samples;
+        /**
+         * Cursor geometry the samples of this frame were selected and damaged
+         * with. Stored per frame so that a cursor change processed between
+         * prePaintScreen() and paintScreen(), or for another output, cannot
+         * make the drawn geometry differ from the damaged geometry.
+         */
+        Trail::CursorShape cursorShape;
         /** Area covered by the cursors drawn in this frame (logical coords). */
         Region damage;
         /** Area covered by the cursors drawn in the previous frame. */
@@ -123,8 +146,8 @@ private:
     /** Diagnostics only: report how many pixels the draw changed. */
     void selfCheckAfter();
 
-    Trail::SampleRing m_ring;
-    QHash<LogicalOutput *, OutputFrameState> m_frames;
+    /** State of every output, created on demand and on screenAdded. */
+    std::map<LogicalOutput *, OutputFrameState> m_frames;
 
     /**
      * View of the render pass being prepared. paintScreen() is not told which
