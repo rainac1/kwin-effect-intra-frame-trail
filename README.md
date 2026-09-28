@@ -1,7 +1,6 @@
-trail
-=====
+# Intra-frame Trail
 
-Intra-frame trail: a KWin effect that redraws the cursor at every position sampled during the previous frame. Modern mouses report far more positions per frame than the compositor draws, so a moving pointer leaves a trail of the copies it would otherwise skip; drawing them improves the pointer's visual smoothness and click accuracy. C++ and OpenGL, built against kwin's effect API. Needs an OpenGL compositor.
+Intra-frame Trail: a KWin effect that redraws the cursor at every position sampled during the previous frame. Modern mouses report far more positions per frame than the compositor draws, so a moving pointer leaves a trail of the copies it would otherwise skip; drawing them improves the pointer's visual smoothness and click accuracy. C++ and OpenGL, built against kwin's effect API. Needs an OpenGL compositor.
 
 Not just for extreme 8000Hz mice: Even with a standard 250Hz office mouse on a 60Hz display, it quadruples the perceived cursor density, turning choppy, nauseating cursor jumping into smooth, readable motion.
 
@@ -9,9 +8,7 @@ The following is a demonstration video; the right side shows the view with this 
 
 https://github.com/user-attachments/assets/b65f0f27-ce55-4336-ac58-59105d327ec2
 
-
-Requirements
-------------
+## Requirements
 
 KWin 6.7.x on Plasma 6, with an OpenGL-capable compositor: the effect draws with
 OpenGL.
@@ -24,17 +21,13 @@ instantiating anything. The KWin development headers must therefore be the exact
 version as the running KWin, and the effect has to be rebuilt after every KWin upgrade
 -- a 6.7.0 build does not load on 6.7.5. See "Pitfalls".
 
-
-Installation
-------------
+## Installation
 
 There is no distribution package yet, so the effect is compiled from source and
 installed system-wide. KWin loads the plugin from Qt's plugin directories, which on most
 distributions means the install prefix has to be /usr.
 
-
-1. Install the build dependencies
----------------------------------
+### Install the build dependencies
 
 The effect itself only uses the KWin effect API, but KWin's CMake package requires its
 own full development set: Qt 6 Core/Gui/Widgets/DBus/Quick, KF6 Config/CoreAddons/
@@ -70,9 +63,7 @@ Install the KWin development package from the same repository as the running Pla
 that its version matches the running KWin exactly: a 6.7.4 header set cannot build a
 plugin for 6.7.5 (see "Pitfalls").
 
-
-2. Download the source and build
---------------------------------
+### Download the source and build
 
 The install prefix must be /usr, the same prefix as the system Qt. KWin searches the Qt
 plugin directories, which do not include /usr/local, so a build configured without a
@@ -103,17 +94,14 @@ src/metadata.json the embedded metadata is not regenerated on its own:
 
     rm -rf build/src/trail_autogen
 
-
-3. Enable the effect
---------------------
+### Enable the effect
 
 Installing does not enable the effect. Switch it on in System Settings:
 
 1. Open System Settings.
 2. Go to Window Management -> Desktop Effects.
 3. Find "Intra-frame Trail" in the list and tick its checkbox.
-4. (optional) click the gear icon to change TrailFrames and MaxSamples.
-5. Click Apply.
+4. Click Apply.
 
 Apply loads the effect into the running compositor (it calls loadEffect over D-Bus), so no
 logout is needed. The same can be done without the GUI:
@@ -134,9 +122,7 @@ To ask the running compositor what it sees:
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
         --method org.kde.kwin.Effects.isEffectLoaded trail
 
-
-Apply a rebuild
----------------
+## Apply a rebuild
 
 Installing a new build does not change what a running KWin executes. Qt's plugin loader
 caches a plugin by path, so unloadEffect + loadEffect re-creates the effect from the
@@ -145,9 +131,7 @@ new compositor process: log out and back in after `sudo cmake --install build`.
 `qdbus org.kde.KWin /KWin reconfigure` does not reset that cache and does not reload the
 plugin; it never calls the effect loader at all.
 
-
-Pitfalls
---------
+## Pitfalls
 
 1. Plasma 5 and Plasma 6 are incompatible.
 
@@ -180,9 +164,7 @@ Pitfalls
    executes. Log out and back in; see "Apply a rebuild". `qdbus org.kde.KWin /KWin
    reconfigure` does not help -- it never reaches the effect loader.
 
-
-Configuration
--------------
+## Configuration
 
 ~/.config/kwinrc:
 
@@ -199,9 +181,7 @@ frame long; raise it for a longer one. MaxSamples caps how many cursors are draw
 frame. KWin re-reads the [Effect-trail] settings when kwinrc changes; the
 [Plugins] trailEnabled switch is only read at session start (docs/USAGE.md).
 
-
-Files
------
+## Files
 
     src/trailsample.{h,cpp}   sample ring buffer, cursor geometry, sampling window
     src/traileffect.{h,cpp}   Effect + InputEventSpy, damage tracking, GL drawing
@@ -210,9 +190,7 @@ Files
     docs/USAGE.md             discovery, configuration, troubleshooting
     docs/DESIGN.md            design and API research
 
-
-Notes
------
+## Notes
 
 The plugin id is the file name, trail.so, not a field in metadata.json.
 
@@ -242,9 +220,7 @@ Never run kwin_wayland --replace or restart the display manager in your session;
 how the desktop goes black and windows are lost. To try a freshly built plugin safely,
 start a nested KWin instead (docs/USAGE.md, "Nested session").
 
-
-Author
-------
+## Author
 
 rainac1 <rainandcap@gmail.com> -- design, implementation and packaging.
 
@@ -252,9 +228,7 @@ The KWin effect API and the headers this plugin builds against are the work of t
 community and are used here, not claimed. Third-party reference checkouts (KWin sources
 and headers, kept out of the repository) keep their own copyright notices.
 
-
-License
--------
+## License
 
 Copyright (C) 2026 rainac1 <rainandcap@gmail.com>
 
