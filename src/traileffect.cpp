@@ -8,6 +8,7 @@
 
 #include <kwin/core/colorspace.h>
 #include <kwin/core/output.h>
+#include <kwin/core/renderbackend.h>
 #include <kwin/core/rendertarget.h>
 #include <kwin/core/renderviewport.h>
 #include <kwin/cursor.h>
@@ -227,12 +228,36 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
     // even if another pass refreshes the cursor in between.
     frame.cursorShape = m_cursorShape;
 
+    // Frames that are presented in adaptive sync mode are not composited at the
+    // display's own rate: the display follows the content on it, so a 60 fps
+    // video on a 120 Hz output takes it from 120 Hz down to 60 Hz, and the
+    // pointer is redrawn at that rate with it. A trail is what makes that drop
+    // obvious - drawn at the lowered rate it steps visibly instead of smoothing
+    // the pointer - and drawing it also forces whatever is underneath to be
+    // composited instead of scanned out (DESIGN.md 6.3), so it stays off while
+    // that holds. kwin puts the answer on the frame being prepared, so read it
+    // from there.
+    const bool vrrActive = data.frame && (data.frame->presentationMode() == PresentationMode::AdaptiveSync
+                                          || data.frame->presentationMode() == PresentationMode::AdaptiveAsync);
+    if (vrrActive != frame.vrrActive) {
+        frame.vrrActive = vrrActive;
+        qCDebug(TRAIL) << (vrrActive ? "trail off: the frame is presented with adaptive sync"
+                                     : "trail on: adaptive sync is not in force");
+    }
+
     // Only take samples out of the ring when they can actually be drawn. If the
     // cursor image is momentarily unavailable, the samples stay buffered and
     // are picked up by the next frame instead of being dropped silently.
     const bool drawable = canDraw();
 
-    if (drawable) {
+    if (vrrActive) {
+        // Drop the samples rather than holding on to them: the window they
+        // cover is the whole time the trail was off, and collecting it on the
+        // way out would flash a smear of positions the pointer passed through
+        // long ago.
+        frame.samples.clear();
+        frame.ring.reset();
+    } else if (drawable) {
         // Samples newer than the last frame that was actually drawn. Keeping
         // this anchor separate from lastPaint means a frame that could not draw
         // does not shift the window forward and lose its samples.

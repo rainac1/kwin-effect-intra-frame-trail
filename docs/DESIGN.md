@@ -417,6 +417,35 @@ leaves the recorded output alone, and paintScreen() is only reached for output p
 well.
 
 
+6.4 The trail is not drawn while VRR is in force
+
+Adaptive sync runs the display at the refresh rate of the content on it: a fullscreen
+60 fps video on a 120 Hz output refreshes at 60 Hz, a game at its own rate. The frame
+being prepared carries that state in OutputFrame::presentationMode(), which is
+AdaptiveSync or AdaptiveAsync exactly when kwin put the output into adaptive sync
+for it. The effect reads that flag from ScreenPrePaintData::frame instead of
+inferring anything from the frame rate it happens to observe.
+
+Nothing is drawn while it holds, because the trail is what makes the drop obvious: drawn
+at the content's rate it steps visibly with it instead of smoothing the pointer, and it
+also forces whatever is underneath to be composited instead of scanned out (6.3). The
+effect stands back until the display is at its own rate again.
+
+This is what makes the VRR policy matter. On Always every frame is presented in adaptive
+sync mode, so the trail is never drawn; on Automatic only the windows that ask for
+adaptive sync - typically games and fullscreen video players - put the output there, and
+the trail is unaffected everywhere else. The README therefore tells users to leave it on
+Automatic or turn it off rather than Always.
+
+While it is off, samples are dropped instead of held: the window they cover is the whole
+time the trail was off, and the frame that resumes would flash a smear of positions the
+pointer passed through long ago.
+
+The pointer stutters in that situation with the effect disabled as well - it is the
+refresh rate, not the trail - so this does not fix that; it keeps the effect out of the
+way of a display doing what adaptive sync asks of it.
+
+
 7. Verification
 ---------------
 

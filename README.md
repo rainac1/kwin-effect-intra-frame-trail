@@ -231,12 +231,15 @@ motion that reveals a trail:
 
     kwriteconfig6 --file kwinrc --group Plugins --key shakecursorEnabled false
 
-Turn Adaptive Sync off while the effect is enabled: when VRR is active and the active
-window is presenting frames, kwin defers every repaint that does not come from that
-window's own surface, so the pointer stutters. Fullscreen video is only the common case of
-that, and the plain pointer stutters just the same with the effect disabled; the trail
-only makes it obvious. The switch is per display, under System Settings -> Display &
-Monitor -> Adaptive Sync.
+Set Adaptive Sync to Automatic or Off rather than Always. The trail is not drawn while
+a frame is presented in adaptive sync mode, and on Always that is every frame; on
+Automatic it is only the windows that ask for it, so the trail is there everywhere
+else. What VRR does is drop the display's refresh rate to the content's, and drop it at
+once - a 60 fps video on a 120 Hz display takes it from 120 Hz to 60 Hz. The trail is
+what makes that drop obvious, because it is drawn at the lowered rate and steps visibly
+with it, so the effect stands back until the display is at its own rate again. The
+pointer stutters in that situation with the effect disabled as well, so the effect is
+not the cause.
 
 Never run kwin_wayland --replace or restart the display manager in your session; that is
 how the desktop goes black and windows are lost. To try a freshly built plugin safely,

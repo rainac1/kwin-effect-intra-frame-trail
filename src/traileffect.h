@@ -93,6 +93,12 @@ private:
         Trail::TimeUs lastCollect = 0;
         /** Smoothed interval between two paint passes for this output. */
         Trail::TimeUs interval = 0;
+        /**
+         * True while this output's frames are presented in adaptive sync mode,
+         * in which case the trail is not drawn. Read from the frame that is
+         * being prepared; see prePaintScreen().
+         */
+        bool vrrActive = false;
     };
 
     /**
