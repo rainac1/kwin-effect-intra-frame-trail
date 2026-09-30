@@ -105,6 +105,9 @@ TrailEffect::TrailEffect()
     connect(effects, &EffectsHandler::screenAdded, this, addScreen);
     connect(effects, &EffectsHandler::screenRemoved, this, [this](LogicalOutput *screen) {
         m_frames.erase(screen);
+        if (m_scanoutBlockOutput == screen) {
+            m_scanoutBlockOutput = nullptr;
+        }
     });
 
     m_selfCheck = qEnvironmentVariableIntValue("TRAIL_KWIN_SELFCHECK") == 1;
@@ -162,7 +165,6 @@ void TrailEffect::pointerMotion(PointerMotionEvent *event)
         Q_UNUSED(screen)
         frame.ring.push(sample);
     }
-    m_lastSampleUs = now;
 
     // KWin repaints when the cursor moves, but the cursor may be rendered on a
     // hardware plane or hidden, so request the region explicitly. Damage is
@@ -273,12 +275,25 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
         data.paint += damage;
     }
 
+    // Decide whether the frame that is being prepared for this output has to be
+    // composited. KWin asks blocksDirectScanout() for this output immediately
+    // after this pass, so the answer can be exact instead of a wall-clock
+    // estimate: only the frame that draws a trail and the frame that erases it
+    // again need the scene. frame.previousDamage describes the last frame that
+    // was really painted, so a trail that is still on screen keeps the block in
+    // place until it has been erased, even when the erasing frame is delayed.
+    //
+    // A time window after the last sample was easier, but it kept a fullscreen
+    // window off its own plane for frames that draw nothing - the compositor
+    // then has to composite the whole window, and for a video on a plane that
+    // is the difference between a page flip and a full-screen conversion.
+    m_scanoutBlockOutput = (!frame.damage.isEmpty() || !frame.previousDamage.isEmpty()) ? data.screen : nullptr;
+
     if (frame.lastPaint != 0) {
         const Trail::TimeUs delta = now - frame.lastPaint;
         if (delta > 0 && delta < kMaxPlausibleEventAgeUs) {
             // Smoothed, so display jitter does not make the trail length jump.
             frame.interval = frame.interval == 0 ? delta : (frame.interval * 3 + delta) / 4;
-            m_intervalUs = frame.interval;
         }
     }
     frame.lastPaint = now;
@@ -524,16 +539,17 @@ bool TrailEffect::isOutputRenderPass(LogicalOutput *screen) const
 bool TrailEffect::blocksDirectScanout() const
 {
     // While a trail is on screen the frame cannot be a direct scanout of a
-    // single window, but an idle pointer must not keep a fullscreen window from
-    // being scanned out, so this only reports true for the duration of the
-    // trail.
-    if (!m_enabled || m_lastSampleUs == 0) {
-        return false;
-    }
-    const Trail::TimeUs interval = m_intervalUs > 0 ? m_intervalUs : kDefaultFrameIntervalUs;
-    const Trail::TimeUs window = Trail::TimeUs(std::max(1, m_trailFrames)) * interval;
-    const Trail::TimeUs now = monotonicNowUs();
-    return now > m_lastSampleUs && (now - m_lastSampleUs) < window;
+    // single window: KWin has no way to blend composited content over a DRM
+    // plane, so a fullscreen window has to be pulled off its own plane and
+    // composited together with the trail. prePaintScreen() records the output
+    // whose last pass needed that, and KWin asks this question for one output
+    // right after that output's prePaintScreen(), so the answer describes
+    // exactly the frame being prepared.
+    //
+    // Reporting false for every frame that neither draws nor erases a trail is
+    // the point: an idle pointer - and with it a fullscreen video that would
+    // otherwise stay on its own plane - must not be composited for nothing.
+    return m_enabled && m_scanoutBlockOutput;
 }
 
 int TrailEffect::requestedEffectChainPosition() const

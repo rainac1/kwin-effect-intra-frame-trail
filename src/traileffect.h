@@ -163,10 +163,16 @@ private:
      */
     bool m_cursorDirty = true;
 
-    /** Timestamp of the most recent sample, used for direct scanout decisions. */
-    Trail::TimeUs m_lastSampleUs = 0;
-    /** Most recent frame interval, used for direct scanout decisions. */
-    Trail::TimeUs m_intervalUs = 0;
+    /**
+     * Output whose frame is currently being prepared and has to composite the
+     * trail, or nullptr when the frame may be a direct scanout.
+     *
+     * KWin asks blocksDirectScanout() for one output immediately after that
+     * output's prePaintScreen(), so this records the decision of the most
+     * recent output pass; a capture pass does not touch it. See
+     * prePaintScreen().
+     */
+    LogicalOutput *m_scanoutBlockOutput = nullptr;
 
     /** Number of frame intervals a sample stays visible. 1 = exactly one frame. */
     int m_trailFrames = 1;

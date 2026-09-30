@@ -313,9 +313,10 @@ clock.
 
     lock-free                 no mutex on the input path, so no contention jitter
 
-    scanout blocked briefly   blocksDirectScanout() returns true only while a trail
-                              exists; a fullscreen window still scans out directly
-                              when the pointer is still
+    scanout blocked briefly   blocksDirectScanout() returns true only for the frames
+                              that draw or erase a trail (6.3), not for a time window
+                              after the last sample; a still pointer leaves a
+                              fullscreen window on its own plane
 
     minimal GL state churn    only blend enable and blend function are saved and
                               restored; shaders go through ShaderBinder RAII push/pop
@@ -364,15 +365,56 @@ cursor rect, and the frame it triggers repaints frame.previousDamage as well.
 When the pointer stops, no further motion event arrives. The frame that the last one
 scheduled paints the trail, and nothing else produces damage afterwards - the compositor
 is damage driven, and even the blocksDirectScanout() flip that ends the trail needs a
-frame before it can be evaluated. The last copy is drawn exactly where the real pointer
-is, so it composites over it and stays on screen as a bright edge around the pointer
-until something unrelated repaints that area.
+frame before it can be evaluated. That frame is composited as well, because
+frame.previousDamage is still non-empty while the trail is on screen (6.3), so the erase
+cannot be given up in favour of a scanout. The last copy is drawn exactly where the real
+pointer is, so it composites over it and stays on screen as a bright edge around the
+pointer until something unrelated repaints that area.
 
 paintScreen() therefore calls effects->addRepaint(frame.damage) after drawing. The next
 frame collects no samples, so prePaintScreen() puts frame.previousDamage into data.paint
 and paintScreen() returns before drawing, which erases the trail; no further repaint is
 requested, so the effect does not keep rendering on its own. The request is only made
 when a trail was really drawn, so a still pointer costs exactly one extra frame.
+
+
+6.3 Direct scanout is blocked per frame, not by a timer
+
+blocksDirectScanout() is not a hint. When any effect reports true, KWin discards every
+overlay, underlay and scanout layer of that output and renders the whole scene into one
+buffer (WorkspaceScene::layerCandidates() returns only the container item). That pulls
+the pointer off the cursor plane and, the expensive part, a fullscreen window off its own
+plane.
+
+A browser playing a fullscreen video is the worst case for that. Its video surface is a
+plane candidate when it is a dmabuf, opaque and updating faster than 20 Hz
+(isCandidate()), and without a trail the output is then presented by page flips while the
+compositor never reads the video at all. One composited frame turns that into a
+full-screen conversion of the video into the scene buffer, and going back to a plane
+discards the surface's texture and its accumulated damage (prepareDirectScanout()), so
+every switch costs an import and can present a stale frame. The restriction is inherent:
+KWin cannot blend composited content over a plane, so a trail that has to be visible
+above a fullscreen window always forces that window to be composited while the trail is
+on screen. The only thing the effect controls is how many frames that is.
+
+The effect therefore answers for the frame it has just prepared. prePaintScreen() records
+the output whose frame has a non-empty frame.damage (the frame that draws the trail) or
+frame.previousDamage (the frame that still has to erase it), and blocksDirectScanout()
+returns exactly that: the frame that draws a trail and the frame that erases it again,
+and nothing once the pointer has been still for a frame.
+
+The time window this replaced - max(1, TrailFrames) times the smoothed paint interval
+after the last motion event - was wrong in both directions. That interval is measured
+between output passes, so a compositor that was idle while the video was scanned out
+inflated it and then kept the video off its plane for many frames after the trail had
+already been erased. And an erasing frame that arrived after the window had expired was
+itself allowed to scan out, which dropped the repaint of frame.previousDamage and left
+exactly the residue 6.2 exists to prevent. Both follow from asking the question at the
+frame that was just prepared instead.
+
+A capture pass (screencast, screenshot) returns before the decision is taken, so it
+leaves the recorded output alone, and paintScreen() is only reached for output passes as
+well.
 
 
 7. Verification
@@ -478,3 +520,9 @@ or the checkbox under System Settings -> Window Management -> Desktop Effects.
    alpha as a mask, which would have to reproduce the TransformColorspace part of KWin's
    base.frag, or a scissor region built from the cursor's opaque spans, which turns every
    overlapping sample into tens of draw calls. Neither was taken.
+
+9. A fullscreen window on its own plane is composited for the frames that draw or erase a
+   trail. blocksDirectScanout() is all or nothing per output, so a browser video that
+   would otherwise be page-flipped is converted into the scene buffer for those frames
+   (6.3). The effect API has no way to blend over a plane, so the only lever would be to
+   leave the trail out on such an output.
