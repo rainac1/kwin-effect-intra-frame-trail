@@ -8,6 +8,21 @@ The following is a demonstration video; the right side shows the view with this 
 
 https://github.com/user-attachments/assets/b65f0f27-ce55-4336-ac58-59105d327ec2
 
+## Principle
+
+The human visual system has a relatively low temporal resolution for tracking
+fast-moving objects; instead, spatial information strongly dominates our
+perception of motion. When a cursor moves rapidly across a screen, it normally
+renders as a series of disconnected, discrete jumps.
+
+Therefore, even on modern displays with high refresh rates like 120Hz or above,
+embedding more spatial information about the cursor's trajectory within a
+single frame provides crucial visual context. By drawing the intermediate
+positions that the mouse hardware reports between frames, this effect bridges
+the visual gaps. This dramatically enhances the brain's perception of smooth,
+continuous motion and greatly improves your subconscious ability to track and
+predict the cursor's exact location.
+
 ## Requirements
 
 KWin 6.7.x on Plasma 6, with an OpenGL-capable compositor: the effect draws with
