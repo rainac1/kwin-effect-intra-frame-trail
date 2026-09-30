@@ -231,6 +231,13 @@ motion that reveals a trail:
 
     kwriteconfig6 --file kwinrc --group Plugins --key shakecursorEnabled false
 
+Turn Adaptive Sync off while the effect is enabled: when VRR is active and the active
+window is presenting frames, kwin defers every repaint that does not come from that
+window's own surface, so the pointer stutters. Fullscreen video is only the common case of
+that, and the plain pointer stutters just the same with the effect disabled; the trail
+only makes it obvious. The switch is per display, under System Settings -> Display &
+Monitor -> Adaptive Sync.
+
 Never run kwin_wayland --replace or restart the display manager in your session; that is
 how the desktop goes black and windows are lost. To try a freshly built plugin safely,
 start a nested KWin instead (docs/USAGE.md, "Nested session").
