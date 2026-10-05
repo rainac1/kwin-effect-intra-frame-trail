@@ -255,8 +255,8 @@ compositor starts a frame, events may still sit in the input queue and be pushed
 buffer after collect(), with timestamps earlier than the wall-clock reading, and a
 wall-clock anchor would exclude them, reliably dropping one sample per frame. Samples
 enqueue in arrival order, so anything arriving after the newest sample drawn is newer,
-and a sample-timestamp anchor cannot miss. The window start is computed by
-Trail::samplingWindowStart(), a pure function and unit-testable.
+and a sample-timestamp anchor cannot miss. With the trail fixed to one frame, that anchor
+is also the window start: there is nothing to widen it by.
 
 Timestamps. pointerMotion prefers the event timestamp (libinput gives CLOCK_MONOTONIC
 microseconds) and falls back to arrival time when it is zero, in the future, or more
@@ -282,8 +282,8 @@ clock.
     no timer polling          no QTimer; cadence comes from kwin's render loop and
                               vblank, addRepaint only requests damage
 
-    exact time window         at TrailFrames=1 the window start is the previous paint,
-                              which is exactly the previous frame
+    exact time window         the window starts at the newest sample drawn last frame,
+                              so every sample is drawn in the very next frame
 
     single per-frame snapshot prePaintScreen snapshots once and paintScreen draws only
                               that batch, so the drawn area and the damage are the same
@@ -322,9 +322,9 @@ clock.
                               restored; shaders go through ShaderBinder RAII push/pop
 
 Per-frame cost: collect() is at most 1024 comparisons; drawing is N uniform updates and
-N draw calls, where N = sample rate / refresh rate * TrailFrames, typically at most 20
-and capped by MaxSamples. At 1000 Hz, 60 Hz and TrailFrames=1 that is about 17 draw
-calls per frame; pixel fill dominates.
+N draw calls, where N = sample rate / refresh rate, typically at most 20 and capped by
+MaxSamples. At 1000 Hz and 60 Hz that is about 17 draw calls per frame; pixel fill
+dominates.
 
 6.1 Damage and drawing must share one source
 
@@ -403,14 +403,14 @@ frame.previousDamage (the frame that still has to erase it), and blocksDirectSca
 returns exactly that: the frame that draws a trail and the frame that erases it again,
 and nothing once the pointer has been still for a frame.
 
-The time window this replaced - max(1, TrailFrames) times the smoothed paint interval
-after the last motion event - was wrong in both directions. That interval is measured
-between output passes, so a compositor that was idle while the video was scanned out
-inflated it and then kept the video off its plane for many frames after the trail had
-already been erased. And an erasing frame that arrived after the window had expired was
-itself allowed to scan out, which dropped the repaint of frame.previousDamage and left
-exactly the residue 6.2 exists to prevent. Both follow from asking the question at the
-frame that was just prepared instead.
+The time window this replaced - a multiple of the smoothed paint interval after the last
+motion event - was wrong in both directions. That interval was measured between output
+passes, so a compositor that was idle while the video was scanned out inflated it and
+then kept the video off its plane for many frames after the trail had already been
+erased. And an erasing frame that arrived after the window had expired was itself allowed
+to scan out, which dropped the repaint of frame.previousDamage and left exactly the
+residue 6.2 exists to prevent. Both follow from asking the question at the frame that was
+just prepared instead.
 
 A capture pass (screencast, screenshot) returns before the decision is taken, so it
 leaves the recorded output alone, and paintScreen() is only reached for output passes as
@@ -468,8 +468,11 @@ device pixels:
 
 Three things to check against it:
 
-    time window     250 samples/s injected at 120 fps gives 2.08 samples/frame;
-                    TrailFrames=4 gives 8.30 cursors/frame, matching the log
+    time window     the log reads 8.30 cursors/frame while the host injected 250
+                    samples/s at 120 fps, i.e. 2.08 per frame interval, so that run
+                    still kept samples for several frame intervals. With the trail
+                    fixed to one frame the stats should read about 2 cursors/frame at
+                    that input rate
 
     coordinates     damage rects reach x=2060, inside the 2240-wide device buffer, so
                     the logical to device scaling of 1.75 is right
@@ -485,7 +488,6 @@ Three things to check against it:
 ~/.config/kwinrc, group [Effect-trail]:
 
     Enabled       default true    runtime switch, independent of [Plugins] trailEnabled
-    TrailFrames   default 1       frame intervals of samples to keep
     MaxSamples    default 256     per-frame cursor cap
 
 Enabling the effect itself: [Plugins] trailEnabled=true plus a loadEffect D-Bus call,
@@ -495,8 +497,8 @@ or the checkbox under System Settings -> Window Management -> Desktop Effects.
 9. Known limits and future work
 -------------------------------
 
-1. Multiple outputs. Every output owns its own sample buffer, damage and frame
-   interval (std::map<LogicalOutput*, OutputFrameState>), because KWin paints each
+1. Multiple outputs. Every output owns its own sample buffer and damage
+   (std::map<LogicalOutput*, OutputFrameState>), because KWin paints each
    output in its own pass with its own viewport, scale and damage region. A single
    shared ring let the output that happened to be painted first consume the samples
    of all the others, so only one monitor ever showed a trail. pointerMotion() pushes

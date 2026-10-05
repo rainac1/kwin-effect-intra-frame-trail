@@ -130,17 +130,17 @@ Configuration
 ~/.config/kwinrc, group [Effect-trail]:
 
     Enabled       default true    runtime switch; does not unload the plugin
-    TrailFrames   default 1       frame intervals of samples to keep
     MaxSamples    default 256     per-frame draw budget
 
-    kwriteconfig6 --file kwinrc --group Effect-trail --key TrailFrames 6
+    kwriteconfig6 --file kwinrc --group Effect-trail --key MaxSamples 128
 
 If a change does not take effect:
 
     gdbus call --session --dest org.kde.KWin --object-path /Effects \
         --method org.kde.kwin.Effects.reconfigureEffect trail
 
-TrailFrames=1 gives a trail exactly one frame long: flick the pointer to see it.
+The trail is always exactly one frame long: the effect draws every pointer sample
+produced since the previous frame, so flick the pointer to see it.
 
 
 Uninstall
@@ -171,7 +171,6 @@ can crash the compositor process, and this keeps that out of the real session.
 
     [Effect-trail]
     Enabled=true
-    TrailFrames=1
     MaxSamples=256
     EOF
     XDG_CONFIG_HOME="$RUNTIME_DIR/config" \

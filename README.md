@@ -188,13 +188,12 @@ plugin; it never calls the effect loader at all.
 
     [Effect-trail]
     Enabled=true
-    TrailFrames=1
     MaxSamples=256
 
-TrailFrames is how many frame intervals of samples to keep. 1 is a trail exactly one
-frame long; raise it for a longer one. MaxSamples caps how many cursors are drawn per
-frame. KWin re-reads the [Effect-trail] settings when kwinrc changes; the
-[Plugins] trailEnabled switch is only read at session start (docs/USAGE.md).
+The trail is always exactly one frame long: the effect draws every sample the pointer
+produced since the previous frame. MaxSamples caps how many cursors are drawn per frame.
+KWin re-reads the [Effect-trail] settings when kwinrc changes; the [Plugins]
+trailEnabled switch is only read at session start (docs/USAGE.md).
 
 ## Files
 

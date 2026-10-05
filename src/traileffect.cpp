@@ -49,7 +49,6 @@ constexpr Trail::TimeUs kDefaultFrameIntervalUs = 16667;
  */
 constexpr Trail::TimeUs kMaxPlausibleEventAgeUs = 1'000'000;
 
-constexpr int kMaxTrailFrames = 16;
 constexpr int kDefaultMaxSamples = 256;
 constexpr std::size_t kRingCapacity = 1024;
 
@@ -123,7 +122,6 @@ void TrailEffect::reconfigure(ReconfigureFlags flags)
 
     const KConfigGroup config = KSharedConfig::openConfig()->group(QStringLiteral("Effect-trail"));
     m_enabled = config.readEntry("Enabled", true);
-    m_trailFrames = std::clamp(config.readEntry("TrailFrames", 1), 1, kMaxTrailFrames);
     m_maxSamples = std::clamp(config.readEntry("MaxSamples", kDefaultMaxSamples), 1, int(kRingCapacity));
 
     // Outputs that already exist must have a buffer before the first motion
@@ -258,14 +256,13 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
         frame.samples.clear();
         frame.ring.reset();
     } else if (drawable) {
-        // Samples newer than the last frame that was actually drawn. Keeping
-        // this anchor separate from lastPaint means a frame that could not draw
-        // does not shift the window forward and lose its samples.
-        Trail::TimeUs anchor = frame.lastCollect;
-        if (anchor == 0) {
-            anchor = now > kDefaultFrameIntervalUs ? now - kDefaultFrameIntervalUs : 0;
+        // Samples newer than the last frame that was actually drawn. The anchor
+        // is the newest sample drawn so far, so a frame that could not draw does
+        // not shift the window forward and lose its samples.
+        Trail::TimeUs since = frame.lastCollect;
+        if (since == 0) {
+            since = now > kDefaultFrameIntervalUs ? now - kDefaultFrameIntervalUs : 0;
         }
-        const Trail::TimeUs since = Trail::samplingWindowStart(anchor, frame.interval, m_trailFrames);
 
         // Snapshot once per frame: painting then uses exactly the set whose area
         // was added to the damage region, so nothing is drawn outside the
@@ -313,15 +310,6 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
     // then has to composite the whole window, and for a video on a plane that
     // is the difference between a page flip and a full-screen conversion.
     m_scanoutBlockOutput = (!frame.damage.isEmpty() || !frame.previousDamage.isEmpty()) ? data.screen : nullptr;
-
-    if (frame.lastPaint != 0) {
-        const Trail::TimeUs delta = now - frame.lastPaint;
-        if (delta > 0 && delta < kMaxPlausibleEventAgeUs) {
-            // Smoothed, so display jitter does not make the trail length jump.
-            frame.interval = frame.interval == 0 ? delta : (frame.interval * 3 + delta) / 4;
-        }
-    }
-    frame.lastPaint = now;
 
     effects->prePaintScreen(data);
 }

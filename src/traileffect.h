@@ -87,12 +87,8 @@ private:
         Region damage;
         /** Area covered by the cursors drawn in the previous frame. */
         Region previousDamage;
-        /** Timestamp of the previous paint pass for this output. */
-        Trail::TimeUs lastPaint = 0;
         /** Start of the sampling window used by the last collected frame. */
         Trail::TimeUs lastCollect = 0;
-        /** Smoothed interval between two paint passes for this output. */
-        Trail::TimeUs interval = 0;
         /**
          * True while this output's frames are presented in adaptive sync mode,
          * in which case the trail is not drawn. Read from the frame that is
@@ -180,8 +176,6 @@ private:
      */
     LogicalOutput *m_scanoutBlockOutput = nullptr;
 
-    /** Number of frame intervals a sample stays visible. 1 = exactly one frame. */
-    int m_trailFrames = 1;
     /** Upper bound on cursors drawn per frame. */
     int m_maxSamples = 256;
     bool m_enabled = true;
