@@ -178,6 +178,15 @@ private:
 
     /** Upper bound on cursors drawn per frame. */
     int m_maxSamples = 256;
+    /**
+     * Keep one out of every this many pointer samples. 1 keeps all of them,
+     * which is the effect's original behaviour; larger values drop the samples
+     * in between before they are buffered, so the drawn cursors end up further
+     * apart inside the same one-frame window.
+     */
+    int m_sampleStride = 1;
+    /** Samples seen since the last one that was kept; see pointerMotion(). */
+    int m_strideCounter = 0;
     bool m_enabled = true;
 
     // Diagnostics only.

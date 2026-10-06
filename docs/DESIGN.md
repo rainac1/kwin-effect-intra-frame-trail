@@ -489,6 +489,13 @@ Three things to check against it:
 
     Enabled       default true    runtime switch, independent of [Plugins] trailEnabled
     MaxSamples    default 256     per-frame cursor cap
+    SampleStride  default 1       keep one out of every N samples, drop the rest
+
+SampleStride is applied in pointerMotion(), before the samples are pushed into the ring:
+the counter keeps one event out of every N and returns for the others, so the dropped
+positions never reach a buffer and prePaintScreen() and the drawing code are unaffected.
+The whole input stream shares one counter, so every output keeps the same positions. A
+value below 1 is read as 1, which keeps every sample.
 
 Enabling the effect itself: [Plugins] trailEnabled=true plus a loadEffect D-Bus call,
 or the checkbox under System Settings -> Window Management -> Desktop Effects.

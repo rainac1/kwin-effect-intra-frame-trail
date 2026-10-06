@@ -50,6 +50,7 @@ constexpr Trail::TimeUs kDefaultFrameIntervalUs = 16667;
 constexpr Trail::TimeUs kMaxPlausibleEventAgeUs = 1'000'000;
 
 constexpr int kDefaultMaxSamples = 256;
+constexpr int kDefaultSampleStride = 1;
 constexpr std::size_t kRingCapacity = 1024;
 
 /** Diagnostics are summarised at most this often. */
@@ -123,6 +124,7 @@ void TrailEffect::reconfigure(ReconfigureFlags flags)
     const KConfigGroup config = KSharedConfig::openConfig()->group(QStringLiteral("Effect-trail"));
     m_enabled = config.readEntry("Enabled", true);
     m_maxSamples = std::clamp(config.readEntry("MaxSamples", kDefaultMaxSamples), 1, int(kRingCapacity));
+    m_sampleStride = std::max(config.readEntry("SampleStride", kDefaultSampleStride), 1);
 
     // Outputs that already exist must have a buffer before the first motion
     // event, otherwise the first frame after enabling would have nothing to
@@ -141,6 +143,17 @@ void TrailEffect::pointerMotion(PointerMotionEvent *event)
     if (!m_enabled) {
         return;
     }
+
+    // SampleStride drops the samples in between here, before they are buffered,
+    // so the trail is built from every m_sampleStride-th position only. The ring
+    // then holds fewer, further apart samples, and prePaintScreen() and
+    // paintScreen() need no idea that this happened: the window still spans the
+    // previous frame, it just contains fewer cursors. One counter for the whole
+    // input stream, so every output sees the same positions.
+    if (++m_strideCounter < m_sampleStride) {
+        return;
+    }
+    m_strideCounter = 0;
 
     const Trail::TimeUs now = monotonicNowUs();
 

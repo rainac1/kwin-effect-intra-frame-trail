@@ -131,8 +131,10 @@ Configuration
 
     Enabled       default true    runtime switch; does not unload the plugin
     MaxSamples    default 256     per-frame draw budget
+    SampleStride  default 1       keep one out of every N samples
 
     kwriteconfig6 --file kwinrc --group Effect-trail --key MaxSamples 128
+    kwriteconfig6 --file kwinrc --group Effect-trail --key SampleStride 4
 
 If a change does not take effect:
 
@@ -141,6 +143,12 @@ If a change does not take effect:
 
 The trail is always exactly one frame long: the effect draws every pointer sample
 produced since the previous frame, so flick the pointer to see it.
+
+SampleStride thins that trail out: it keeps one sample out of every N and drops the
+others as they arrive, so the drawn cursors are N times further apart while the trail
+still covers the same frame. The newest samples close to the real pointer can be dropped
+with them, so raise it only as far as the trail is too dense to read. Values below 1 fall
+back to 1, which keeps every sample and is the default.
 
 
 Uninstall
