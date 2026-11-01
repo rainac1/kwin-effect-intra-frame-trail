@@ -34,7 +34,11 @@ set(KDE_INSTALL_PLUGINDIR "${KDE_INSTALL_LIBDIR}/qt6/plugins")
 # lists them in its link interface, so the imported targets have to exist.
 find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets DBus)
 find_package(KF6CoreAddons REQUIRED)
-find_package(KWin REQUIRED)
+# 6.8 changed Effect::paintScreen() to return bool so that a failed scene paint
+# (e.g. after a GPU reset) stops the whole effect chain. The override here matches
+# that signature, so an older KWin cannot compile this plugin -- reject it here
+# with a clear message instead of failing on the override.
+find_package(KWin 6.8 REQUIRED)
 
 # Some installed CMake packages hard-code absolute paths from the machine they
 # were built on (e.g. /usr/include/KF6/KConfig or

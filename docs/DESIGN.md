@@ -1,9 +1,10 @@
 Pointer Trail -- Design
 =======================
 
-Requirements, what KWin 6.7.5 actually exposes, the resulting design, and how it was
-verified. The KWin claims come from the installed 6.7.5 sources and headers
-(Plasma 6.7.5 / KWin 6.7.5 / Qt 6.11.2 / KF6 6.30), not from documentation.
+Requirements, what KWin 6.8.2 actually exposes, the resulting design, and how it was
+verified. The API claims come from the installed 6.8.2 headers
+(Plasma 6.8.2 / KWin 6.8.2 / Qt 6.11.2 / KF6 6.31) and from loading the plugin in a
+nested 6.8.2 compositor, not from documentation.
 
 
 1. Requirement
@@ -80,9 +81,10 @@ No extra thread. See section 5.
     void Effect::prePaintScreen(ScreenPrePaintData &data);
         // data.paint is in logical coordinates
 
-    void Effect::paintScreen(const RenderTarget &, const RenderViewport &,
+    bool Effect::paintScreen(const RenderTarget &, const RenderViewport &,
                              int mask, const Region &deviceRegion, LogicalOutput *);
         // deviceRegion is in device coordinates
+        // returns false when the scene could not be painted (e.g. GPU reset)
 
 Coordinate spaces are the trap here.
 
@@ -98,6 +100,12 @@ Coordinate spaces are the trap here.
     requestedEffectChainPosition() therefore means "called first, drawn on top",
     matching mouseclick and touchpoints. Drawing happens after the delegation, so the
     trail sits above windows.
+
+    Failure propagation. Since 6.8, EffectsHandler::paintScreen() and
+    Effect::paintScreen() return bool: false means the scene could not be painted, for
+    example after a GPU reset, and every effect has to stop rendering immediately. The
+    delegation result is therefore checked before drawing and returned to the caller;
+    otherwise the trail would be drawn into a target the scene never reached.
 
     Cursor geometry, copied from scene/cursoritem.cpp to stay aligned with the real
     cursor: position - hotspot, size image.size() / devicePixelRatio().
@@ -149,7 +157,7 @@ Coordinate spaces are the trap here.
     [Plugins] trailEnabled=true.
 
     ABI: the headers state that effect plugins must be compiled against the same
-    kwineffects version as kwin (6.7.5 against kwin-devel 6.7.5). The actual guard is
+    kwineffects version as kwin (6.8.2 against kwin-devel 6.8.2). The actual guard is
     the factory IID, which embeds the full version:
 
         EffectPluginFactory_iid = "org.kde.kwin.EffectPluginFactory"
@@ -157,7 +165,7 @@ Coordinate spaces are the trap here.
 
     PluginEffectLoader::factory() compares it against the metadata and, on a mismatch,
     logs one qCDebug and returns nullptr without calling loader.instance(). Neither the
-    factory nor createEffect() runs. With the IID rewritten to 6.7.4, kwin logs
+    factory nor createEffect() runs. With the IID rewritten to 6.8.1, kwin logs
     "has not matching plugin version" and "Couldn't get an EffectPluginFactory", other
     effects load, and the compositor does not crash. The log is qCDebug(KWIN_CORE),
     invisible by default, and because discovery is metadata-only the effect still shows

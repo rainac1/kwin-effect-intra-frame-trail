@@ -327,26 +327,32 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
     effects->prePaintScreen(data);
 }
 
-void TrailEffect::paintScreen(const RenderTarget &renderTarget,
+bool TrailEffect::paintScreen(const RenderTarget &renderTarget,
                               const RenderViewport &viewport,
                               int mask,
                               const Region &deviceRegion,
                               LogicalOutput *screen)
 {
-    // Paint everything below the effect first, then draw on top of it.
-    effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen);
+    // Paint everything below the effect first, then draw on top of it. Since
+    // KWin 6.8 the call reports whether the scene was painted at all; a failure
+    // (e.g. a GPU reset) has to abort the whole pass, so the trail must not be
+    // drawn into a target the scene did not reach.
+    const bool painted = effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen);
+    if (!painted) {
+        return false;
+    }
 
     // Capture passes have already delegated above and stop here: the trail must
     // not be drawn into a capture target, both because the state below belongs
     // to the output and because the capture's damage is tracked by its own
     // source. See prePaintScreen().
     if (!isOutputRenderPass(screen)) {
-        return;
+        return true;
     }
 
     const auto it = m_frames.find(screen);
     if (it == m_frames.end()) {
-        return;
+        return true;
     }
     OutputFrameState &frame = it->second;
 
@@ -354,14 +360,14 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     frame.previousDamage = frame.damage;
 
     if (!m_enabled || !effects->isOpenGLCompositing() || frame.samples.empty()) {
-        return;
+        return true;
     }
 
     // prePaintScreen() refreshed the cursor image before computing the damage
     // and only collected samples when they can be drawn, so the geometry here is
     // the same one the damage was computed from.
     if (!m_cursorTexture || !frame.cursorShape.isValid()) {
-        return;
+        return true;
     }
 
     // Samples are in logical coordinates; the projection matrix maps device
@@ -369,7 +375,7 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
     const double scale = viewport.scale();
     const QSizeF deviceSize = frame.cursorShape.size * scale;
     if (deviceSize.isEmpty()) {
-        return;
+        return true;
     }
     const QPointF deviceHotspot = frame.cursorShape.hotspot * scale;
     const QMatrix4x4 projection = viewport.projectionMatrix();
@@ -429,6 +435,7 @@ void TrailEffect::paintScreen(const RenderTarget &renderTarget,
 
     selfCheckAfter();
     reportFrameStats(frame.samples.size());
+    return true;
 }
 
 void TrailEffect::selfCheckBefore(const Region &logicalDamage, double scale, const QSize &targetSize)

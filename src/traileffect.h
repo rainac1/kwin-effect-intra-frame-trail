@@ -48,7 +48,7 @@ public:
 
     void reconfigure(ReconfigureFlags flags) override;
     void prePaintScreen(ScreenPrePaintData &data) override;
-    void paintScreen(const RenderTarget &renderTarget,
+    bool paintScreen(const RenderTarget &renderTarget,
                      const RenderViewport &viewport,
                      int mask,
                      const Region &deviceRegion,

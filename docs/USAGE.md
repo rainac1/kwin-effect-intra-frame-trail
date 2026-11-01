@@ -31,13 +31,13 @@ Version guard
 
 The factory IID carries kwin's full version (config-kwin.h):
 
-    org.kde.kwin.EffectPluginFactory6.7.5
+    org.kde.kwin.EffectPluginFactory6.8.2
 
 PluginEffectLoader::factory() compares it against the plugin's embedded metadata before
 instantiating anything. On a mismatch it logs one qCDebug(KWIN_CORE) line and returns
 nullptr:
 
-    "trail" has not matching plugin version, expected ...6.7.5 got ...6.7.4
+    "trail" has not matching plugin version, expected ...6.8.2 got ...6.8.1
     Couldn't get an EffectPluginFactory for: "trail"
 
 No crash, other effects load, the compositor keeps running. Discovery is metadata-only

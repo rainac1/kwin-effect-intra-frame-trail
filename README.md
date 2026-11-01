@@ -25,16 +25,16 @@ predict the cursor's exact location.
 
 ## Requirements
 
-KWin 6.7.x on Plasma 6, with an OpenGL-capable compositor: the effect draws with
+KWin 6.8.x on Plasma 6, with an OpenGL-capable compositor: the effect draws with
 OpenGL.
 
-The source only uses the effect API as it exists throughout the 6.7 series, so any 6.7
-point release builds it. CMakeLists.txt asks for KWin without a version, and the pin
-comes from KWin instead: config-kwin.h embeds the full version in the plugin IID
-(org.kde.kwin.EffectPluginFactory6.7.5), which KWin compares with its own before
+The source uses the effect API of the 6.8 series, so any 6.8 point release builds it.
+CMakeLists.txt asks for KWin 6.8, and the exact pin comes from KWin itself: config-kwin.h
+embeds the full version in the plugin IID
+(org.kde.kwin.EffectPluginFactory6.8.2), which KWin compares with its own before
 instantiating anything. The KWin development headers must therefore be the exact same
 version as the running KWin, and the effect has to be rebuilt after every KWin upgrade
--- a 6.7.0 build does not load on 6.7.5. See "Pitfalls".
+-- a 6.8.0 build does not load on 6.8.2. See "Pitfalls".
 
 ## Installation
 
@@ -50,7 +50,7 @@ WindowSystem, libepoxy, libdrm, Vulkan and Wayland-server. CMake refuses to conf
 until every one of them is present, so install the development packages even though most
 of them look unrelated to a cursor effect.
 
-Ubuntu/Debian (Plasma 6). Use a release that ships KWin 6.7.x, such as Debian forky/sid
+Ubuntu/Debian (Plasma 6). Use a release that ships KWin 6.8.x, such as Debian forky/sid
 or KDE neon; Debian trixie ships 6.3, which this effect does not load on:
 
     sudo apt install cmake extra-cmake-modules build-essential \
@@ -75,8 +75,8 @@ Fedora:
         vulkan-loader-devel wayland-devel
 
 Install the KWin development package from the same repository as the running Plasma, so
-that its version matches the running KWin exactly: a 6.7.4 header set cannot build a
-plugin for 6.7.5 (see "Pitfalls").
+that its version matches the running KWin exactly: a 6.8.1 header set cannot build a
+plugin for 6.8.2 (see "Pitfalls").
 
 ### Download the source and build
 
@@ -159,7 +159,7 @@ plugin; it never calls the effect loader at all.
    KWin ships no long-term stable C++ plugin ABI. Even within Plasma 6 a point release
    can change an internal API and break an existing effect, or crash KWin. On top of the
    ABI, this effect carries a hard version guard: the factory IID contains KWin's full
-   version (org.kde.kwin.EffectPluginFactory6.7.5), and KWin refuses to instantiate a
+   version (org.kde.kwin.EffectPluginFactory6.8.2), and KWin refuses to instantiate a
    plugin built against a different one. After a KWin update the symptom is usually just
    "the effect disappeared", because the mismatch is logged at debug level. Rebuild
    against the matching KWin development package (kwin-devel, kwin-dev on
