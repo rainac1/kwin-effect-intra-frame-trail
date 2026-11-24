@@ -4,18 +4,23 @@
 
 #include <kwin/effect/effect.h>
 #include <kwin/input_event_spy.h>
+#include <kwin/opengl/glvertexbuffer.h>
 
 #include <QImage>
+#include <QPointF>
+#include <QSize>
 #include <QSizeF>
 
-#include <map>
 #include <memory>
 #include <vector>
 
 namespace KWin
 {
 
+class Cursor;
 class CursorSource;
+class GLFramebuffer;
+class GLShader;
 class GLTexture;
 
 /**
@@ -53,6 +58,8 @@ public:
                      int mask,
                      const Region &deviceRegion,
                      LogicalOutput *screen) override;
+    void postPaintScreen() override;
+    bool isActive() const override;
     bool blocksDirectScanout() const override;
     int requestedEffectChainPosition() const override;
 
@@ -89,12 +96,26 @@ private:
         Region previousDamage;
         /** Start of the sampling window used by the last collected frame. */
         Trail::TimeUs lastCollect = 0;
+        /** Real cursor position snapshotted in prePaintScreen() for head masking. */
+        QPointF headPos;
+        bool hasHead = false;
+        /**
+         * True once pointerMotion() has already scheduled a repaint for this
+         * output during the current frame interval; cleared on prePaintScreen().
+         */
+        bool repaintPending = false;
         /**
          * True while this output's frames are presented in adaptive sync mode,
          * in which case the trail is not drawn. Read from the frame that is
          * being prepared; see prePaintScreen().
          */
         bool vrrActive = false;
+    };
+
+    struct OutputEntry
+    {
+        LogicalOutput *screen = nullptr;
+        std::unique_ptr<OutputFrameState> state;
     };
 
     /**
@@ -109,13 +130,45 @@ private:
         const CursorSource *source = nullptr;
         QSizeF size;
         QPointF hotspot;
+        double surfaceScale = 0.0;
     };
 
-    /** True when the pointer's own cursor changed shape or geometry. */
-    bool cursorGeometryChanged() const;
+    struct CachedTexture
+    {
+        qint64 key = 0;
+        QSize size;
+        std::unique_ptr<GLTexture> texture;
+    };
 
-    /** Fetch the cursor image and rebuild the cached shape and texture. */
-    void refreshCursorShape();
+    OutputFrameState *findFrame(LogicalOutput *screen);
+    const OutputFrameState *findFrame(LogicalOutput *screen) const;
+    OutputFrameState &findOrCreateFrame(LogicalOutput *screen);
+
+    /** Maximum scale across all known outputs (for crisp GPU cursor rendering). */
+    double maxOutputScale() const;
+
+    /** True when the pointer's own cursor changed shape, geometry, or scale. */
+    bool cursorGeometryChanged(double targetScale) const;
+
+    /** Refresh the cached cursor shape and GPU texture without CPU readback. */
+    void refreshCursorShape(RenderView *view, double targetScale);
+
+    /** Render a Wayland SurfaceCursorSource directly into m_surfaceCursorFbo. */
+    bool renderCursorItemToTexture(const Cursor *cursor, RenderView *view, double scale);
+
+    /** Look up or upload a QImage-backed cursor texture in the small LRU cache. */
+    GLTexture *getOrUploadCachedTexture(const QImage &image);
+
+    /** Lazily compile the batched single-draw-call trail shader. */
+    bool ensureTrailShader();
+
+    /** Fallback renderer when the custom batched shader is unavailable. */
+    void paintFallback(const RenderTarget &renderTarget,
+                       const QMatrix4x4 &projection,
+                       const OutputFrameState &frame,
+                       double scale,
+                       const QSizeF &deviceSize,
+                       const QPointF &deviceHotspot);
 
     /** True when this frame can actually collect and paint cursor samples. */
     bool canDraw() const;
@@ -143,8 +196,8 @@ private:
     /** Diagnostics only: report how many pixels the draw changed. */
     void selfCheckAfter();
 
-    /** State of every output, created on demand and on screenAdded. */
-    std::map<LogicalOutput *, OutputFrameState> m_frames;
+    /** State of every output, stored contiguously for fast scan on hot paths. */
+    std::vector<OutputEntry> m_frames;
 
     /**
      * View of the render pass being prepared. paintScreen() is not told which
@@ -153,40 +206,60 @@ private:
      * view by isOutputRenderPass().
      */
     RenderView *m_currentView = nullptr;
+    LogicalOutput *m_currentScreen = nullptr;
 
-    std::unique_ptr<GLTexture> m_cursorTexture;
-    qint64 m_cursorImageKey = 0;
+    /** LRU cache for QImage-backed cursors (theme shapes and animated sprites). */
+    std::vector<CachedTexture> m_textureCache;
+    /** Reusable GPU target for SurfaceCursorSource (declared before its FBO). */
+    std::unique_ptr<GLTexture> m_surfaceCursorTexture;
+    std::unique_ptr<GLFramebuffer> m_surfaceCursorFbo;
+    /** Non-owning pointer to whichever texture is currently active. */
+    GLTexture *m_activeCursorTexture = nullptr;
+
     Trail::CursorShape m_cursorShape;
     CursorImageState m_cursorImageState;
     /**
      * Set when the compositor reports new cursor contents. Together with
-     * cursorGeometryChanged() this keeps the cached image up to date without
-     * fetching it on every frame.
+     * cursorGeometryChanged() this keeps the cached texture up to date without
+     * refreshing on every frame.
      */
     bool m_cursorDirty = true;
+
+    /** Batched trail shader (per-sample fade + real-cursor alpha masking). */
+    std::unique_ptr<GLShader> m_trailShader;
+    bool m_trailShaderAttempted = false;
+    int m_locTextureMatrix = -1;
+    int m_locCursorOrigin = -1;
+    int m_locCursorInvSize = -1;
+    int m_locMaskCursor = -1;
+
+    /** Reusable vertex scratch buffers (zero steady-state heap allocation). */
+    std::vector<GLVertex3D> m_vertices3D;
+    std::vector<GLVertex2D> m_vertices2D;
 
     /**
      * Output whose frame is currently being prepared and has to composite the
      * trail, or nullptr when the frame may be a direct scanout.
-     *
-     * KWin asks blocksDirectScanout() for one output immediately after that
-     * output's prePaintScreen(), so this records the decision of the most
-     * recent output pass; a capture pass does not touch it. See
-     * prePaintScreen().
      */
     LogicalOutput *m_scanoutBlockOutput = nullptr;
 
     /** Upper bound on cursors drawn per frame. */
     int m_maxSamples = 256;
     /**
-     * Keep one out of every this many pointer samples. 1 keeps all of them,
-     * which is the effect's original behaviour; larger values drop the samples
-     * in between before they are buffered, so the drawn cursors end up further
-     * apart inside the same one-frame window.
+     * Keep one out of every this many pointer samples. 1 keeps all of them;
+     * larger values drop the samples in between before they are buffered.
      */
     int m_sampleStride = 1;
     /** Samples seen since the last one that was kept; see pointerMotion(). */
     int m_strideCounter = 0;
+    /**
+     * Whether to block direct scanout (and thus DRM cursor/overlay planes)
+     * while a trail is active. Off by default to preserve the hardware cursor
+     * plane and fullscreen direct scanout.
+     */
+    bool m_blockDirectScanout = false;
+    /** Dyadic fractal opacity parameters. */
+    Trail::FractalOpacityConfig m_fade;
     bool m_enabled = true;
 
     // Diagnostics only.

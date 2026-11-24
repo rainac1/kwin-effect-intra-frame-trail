@@ -12,22 +12,31 @@
 #include <kwin/core/rendertarget.h>
 #include <kwin/core/renderviewport.h>
 #include <kwin/cursor.h>
+#include <kwin/cursorsource.h>
 #include <kwin/effect/effecthandler.h>
 #include <kwin/effect/globals.h>
 #include <kwin/input.h>
 #include <kwin/input_event.h>
-#include <kwin/opengl/glplatform.h>
+#include <kwin/opengl/eglcontext.h>
+#include <kwin/opengl/glframebuffer.h>
 #include <kwin/opengl/glshader.h>
 #include <kwin/opengl/glshadermanager.h>
 #include <kwin/opengl/gltexture.h>
+#include <kwin/scene/item.h>
+#include <kwin/scene/itemrenderer.h>
 #include <kwin/scene/scene.h>
+#include <kwin/scene/workspacescene.h>
 
 #include <KConfigGroup>
 #include <KSharedConfig>
 #include <QLoggingCategory>
 #include <QMatrix4x4>
+#include <QVector2D>
+#include <QVector3D>
+#include <QVector4D>
 
 #include <algorithm>
+#include <cmath>
 #include <ctime>
 
 Q_LOGGING_CATEGORY(TRAIL, "kwin_effect_trail")
@@ -38,8 +47,10 @@ namespace KWin
 namespace
 {
 
-/** Assumed frame interval before the first one has been measured (60 Hz). */
+/** Assumed frame interval before the output refresh rate is known (60 Hz). */
 constexpr Trail::TimeUs kDefaultFrameIntervalUs = 16667;
+constexpr Trail::TimeUs kMinFrameIntervalUs = 1000;
+constexpr Trail::TimeUs kMaxFrameIntervalUs = 100'000;
 
 /**
  * Upper bound for a sample timestamp to be considered usable. libinput reports
@@ -51,7 +62,18 @@ constexpr Trail::TimeUs kMaxPlausibleEventAgeUs = 1'000'000;
 
 constexpr int kDefaultMaxSamples = 256;
 constexpr int kDefaultSampleStride = 1;
+constexpr bool kDefaultBlockDirectScanout = false;
+constexpr bool kDefaultFadeEnabled = true;
+constexpr double kDefaultFadeBase = 1.2446;
+constexpr double kMinFadeBase = 1.0;
+constexpr double kMaxFadeBase = 16.0;
+
 constexpr std::size_t kRingCapacity = 1024;
+constexpr std::size_t kMaxCachedTextures = 32;
+constexpr int kMaxSurfaceCursorSize = 512;
+
+/** Tolerance (logical px) for recognising a sample already covered by the real cursor. */
+constexpr float kHeadMatchEpsilon = 0.01f;
 
 /** Diagnostics are summarised at most this often. */
 constexpr Trail::TimeUs kStatsIntervalUs = 2'000'000;
@@ -73,6 +95,24 @@ Rect toIntRect(const QRectF &rect)
     return RectF(rect).toAlignedRect();
 }
 
+Trail::TimeUs frameIntervalFromView(const RenderView *view)
+{
+    if (!view) {
+        return kDefaultFrameIntervalUs;
+    }
+    const uint refreshRateMHz = view->refreshRate();
+    if (refreshRateMHz == 0) {
+        return kDefaultFrameIntervalUs;
+    }
+    return std::clamp<Trail::TimeUs>(1'000'000'000ULL / refreshRateMHz, kMinFrameIntervalUs, kMaxFrameIntervalUs);
+}
+
+bool isSameLogicalPoint(const Trail::Sample &sample, const QPointF &pos)
+{
+    return std::abs(sample.x - float(pos.x())) < kHeadMatchEpsilon
+        && std::abs(sample.y - float(pos.y())) < kHeadMatchEpsilon;
+}
+
 } // namespace
 
 TrailEffect::OutputFrameState::OutputFrameState()
@@ -87,12 +127,8 @@ TrailEffect::TrailEffect()
     // spy is uninstalled automatically when this object is destroyed.
     input()->installInputEventSpy(this);
 
-    // Getting the cursor image is cheap for theme shapes but expensive when a
-    // client provides the cursor contents -- which is the case for every
-    // Xwayland app, because Xwayland hands its cursors over as a wl_surface.
-    // KWin then renders the cursor scene into a texture and reads it back
-    // (Application::cursorImage() -> grabCursorOpenGL()), so this must not
-    // happen on every frame. The compositor tells us when the contents change.
+    // Refresh cursor textures only when the compositor signals a change rather
+    // than on every frame.
     connect(effects, &EffectsHandler::cursorShapeChanged, this, [this] {
         m_cursorDirty = true;
     });
@@ -100,22 +136,82 @@ TrailEffect::TrailEffect()
     // One sample buffer and one frame state per output. The pointer is a single
     // global device, so every output has to observe the same samples, but each
     // one consumes them in its own paint pass and keeps its own damage.
-    const auto addScreen = [this](LogicalOutput *screen) {
-        m_frames.try_emplace(screen);
-    };
-    connect(effects, &EffectsHandler::screenAdded, this, addScreen);
+    connect(effects, &EffectsHandler::screenAdded, this, [this](LogicalOutput *screen) {
+        findOrCreateFrame(screen);
+    });
     connect(effects, &EffectsHandler::screenRemoved, this, [this](LogicalOutput *screen) {
-        m_frames.erase(screen);
+        std::erase_if(m_frames, [screen](const OutputEntry &entry) {
+            return entry.screen == screen;
+        });
         if (m_scanoutBlockOutput == screen) {
             m_scanoutBlockOutput = nullptr;
         }
+        if (m_currentScreen == screen) {
+            m_currentScreen = nullptr;
+        }
     });
+
+    m_vertices3D.reserve(std::size_t(kDefaultMaxSamples) * 6);
+    m_vertices2D.reserve(std::size_t(kDefaultMaxSamples) * 6);
 
     m_selfCheck = qEnvironmentVariableIntValue("TRAIL_KWIN_SELFCHECK") == 1;
     reconfigure(ReconfigureAll);
 }
 
-TrailEffect::~TrailEffect() = default;
+TrailEffect::~TrailEffect()
+{
+    effects->makeOpenGLContextCurrent();
+    m_trailShader.reset();
+    m_surfaceCursorFbo.reset();
+    m_surfaceCursorTexture.reset();
+    m_textureCache.clear();
+    m_activeCursorTexture = nullptr;
+}
+
+TrailEffect::OutputFrameState *TrailEffect::findFrame(LogicalOutput *screen)
+{
+    for (OutputEntry &entry : m_frames) {
+        if (entry.screen == screen) {
+            return entry.state.get();
+        }
+    }
+    return nullptr;
+}
+
+const TrailEffect::OutputFrameState *TrailEffect::findFrame(LogicalOutput *screen) const
+{
+    for (const OutputEntry &entry : m_frames) {
+        if (entry.screen == screen) {
+            return entry.state.get();
+        }
+    }
+    return nullptr;
+}
+
+TrailEffect::OutputFrameState &TrailEffect::findOrCreateFrame(LogicalOutput *screen)
+{
+    if (OutputFrameState *existing = findFrame(screen)) {
+        return *existing;
+    }
+    auto state = std::make_unique<OutputFrameState>();
+    OutputFrameState &ref = *state;
+    m_frames.push_back(OutputEntry{
+        .screen = screen,
+        .state = std::move(state),
+    });
+    return ref;
+}
+
+double TrailEffect::maxOutputScale() const
+{
+    double maxScale = 1.0;
+    for (const LogicalOutput *screen : effects->screens()) {
+        if (screen) {
+            maxScale = std::max(maxScale, double(screen->scale()));
+        }
+    }
+    return maxScale;
+}
 
 void TrailEffect::reconfigure(ReconfigureFlags flags)
 {
@@ -125,12 +221,16 @@ void TrailEffect::reconfigure(ReconfigureFlags flags)
     m_enabled = config.readEntry("Enabled", true);
     m_maxSamples = std::clamp(config.readEntry("MaxSamples", kDefaultMaxSamples), 1, int(kRingCapacity));
     m_sampleStride = std::max(config.readEntry("SampleStride", kDefaultSampleStride), 1);
+    m_blockDirectScanout = config.readEntry("BlockDirectScanout", kDefaultBlockDirectScanout);
+
+    m_fade.enabled = config.readEntry("Fade", kDefaultFadeEnabled);
+    m_fade.base = std::clamp(config.readEntry("FadeBase", kDefaultFadeBase), kMinFadeBase, kMaxFadeBase);
 
     // Outputs that already exist must have a buffer before the first motion
     // event, otherwise the first frame after enabling would have nothing to
     // draw. screenAdded() covers outputs that appear later.
     for (LogicalOutput *screen : effects->screens()) {
-        m_frames.try_emplace(screen);
+        findOrCreateFrame(screen);
     }
 
     if (m_enabled) {
@@ -145,11 +245,8 @@ void TrailEffect::pointerMotion(PointerMotionEvent *event)
     }
 
     // SampleStride drops the samples in between here, before they are buffered,
-    // so the trail is built from every m_sampleStride-th position only. The ring
-    // then holds fewer, further apart samples, and prePaintScreen() and
-    // paintScreen() need no idea that this happened: the window still spans the
-    // previous frame, it just contains fewer cursors. One counter for the whole
-    // input stream, so every output sees the same positions.
+    // so the trail is built from every m_sampleStride-th position only. One
+    // counter for the whole input stream, so every output sees the same points.
     if (++m_strideCounter < m_sampleStride) {
         return;
     }
@@ -171,83 +268,63 @@ void TrailEffect::pointerMotion(PointerMotionEvent *event)
         .time = time,
     };
 
-    // The position is global, so every output keeps its own copy of the same
-    // sample and decides for itself which part of it lands on its viewport.
-    for (auto &[screen, frame] : m_frames) {
-        Q_UNUSED(screen)
+    const QRectF sampleRect = m_cursorShape.isValid()
+        ? Trail::cursorRect(sample, m_cursorShape)
+        : QRectF(sample.x - 1.0, sample.y - 1.0, 2.0, 2.0);
+    const Rect intRect = toIntRect(sampleRect);
+
+    // Push into every output's ring, and coalesce addRepaint() to at most once
+    // per output per frame interval. prePaintScreen() adds the exact damage for
+    // every collected sample, so waking the render loop once per frame is
+    // enough even when the mouse reports at 8 kHz.
+    bool needsRepaint = false;
+    for (OutputEntry &entry : m_frames) {
+        OutputFrameState &frame = *entry.state;
         frame.ring.push(sample);
+        if (!frame.repaintPending && (!entry.screen || entry.screen->geometry().intersects(intRect))) {
+            frame.repaintPending = true;
+            needsRepaint = true;
+        }
     }
 
-    // KWin repaints when the cursor moves, but the cursor may be rendered on a
-    // hardware plane or hidden, so request the region explicitly. Damage is
-    // coalesced by the scene, so one call per event is cheap even at 8 kHz.
-    if (m_cursorShape.isValid()) {
-        effects->addRepaint(Trail::cursorRect(sample, m_cursorShape));
+    if (needsRepaint) {
+        effects->addRepaint(sampleRect);
     }
 }
 
 void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
 {
     // Capture paths render the very same scene through the very same effect
-    // chain, but into a target of their own: a screencast stream re-renders
-    // every frame into a PipeWire buffer, a screenshot renders once into an
-    // offscreen texture. They reach this code with the same data.screen as the
-    // output frame, but a different view.
-    //
-    // Letting them run the code below corrupts the output frame in two ways.
-    // The sample ring is consumed (SampleRing::collect() marks everything it
-    // saw as read), so whichever pass runs first takes the samples and the
-    // output only sees the ones that arrived in between -- the trail visibly
-    // drops to the capture rate. And frame.previousDamage is shared, although
-    // the two passes draw into different buffers, so the rects recorded for one
-    // buffer are never repainted in the other and the trail that was drawn last
-    // frame stays on screen as residue.
-    //
-    // The view has to be remembered either way: paintScreen() gets no view and
-    // must make the same decision.
+    // chain, but into a target of their own (screencast, screenshot, color
+    // picker, screen transform). Leave per-output state untouched for them.
     m_currentView = data.view;
     if (!isOutputRenderPass(data.screen)) {
+        m_currentScreen = nullptr;
         effects->prePaintScreen(data);
         return;
     }
+    m_currentScreen = data.screen;
 
     const Trail::TimeUs now = monotonicNowUs();
-    OutputFrameState &frame = m_frames.try_emplace(data.screen).first->second;
+    OutputFrameState &frame = findOrCreateFrame(data.screen);
+    frame.repaintPending = false;
 
-    // The cursor image has to be up to date *before* the damage region is
-    // computed, because the damage has to describe exactly what is going to be
-    // drawn. While this was refreshed from paintScreen(), a cursor that changed
-    // its shape or size was painted with the new geometry into a region that
-    // had been computed from the old one; the pixels outside that region were
-    // never repainted afterwards and stayed on screen as residue.
-    //
-    // m_cursorDirty and cursorGeometryChanged() keep this from becoming a
-    // per-frame fetch; the other two terms only retry while there is nothing
-    // usable to draw with, which is cheap because a cursor without geometry
-    // returns before any GL work.
-    if (m_enabled && (m_cursorDirty || !m_cursorTexture || !m_cursorShape.isValid() || cursorGeometryChanged())) {
-        // KWin makes the compositor's context current before prePaintScreen(),
-        // so this is normally a no-op; it keeps the upload below valid when the
-        // effect is not first in the chain.
+    const double targetScale = std::max(maxOutputScale(), data.view ? double(data.view->scale()) : 1.0);
+
+    // Refresh the cursor texture *before* computing damage so damage and
+    // drawing always use the exact same cursor geometry within one frame.
+    if (m_enabled && (m_cursorDirty || !m_activeCursorTexture || !m_cursorShape.isValid() || cursorGeometryChanged(targetScale))) {
         effects->makeOpenGLContextCurrent();
-        refreshCursorShape();
+        refreshCursorShape(data.view, targetScale);
         m_cursorDirty = false;
     }
 
-    // Snapshot the geometry together with the samples, so that the draw in
-    // paintScreen() uses exactly the geometry this damage was computed from --
-    // even if another pass refreshes the cursor in between.
+    // Snapshot geometry and head pointer position together with the samples.
     frame.cursorShape = m_cursorShape;
+    Cursor *cursor = Cursors::self()->currentCursor();
+    frame.hasHead = cursor && !Cursors::self()->isCursorHidden();
+    frame.headPos = frame.hasHead ? cursor->pos() : QPointF();
 
-    // Frames that are presented in adaptive sync mode are not composited at the
-    // display's own rate: the display follows the content on it, so a 60 fps
-    // video on a 120 Hz output takes it from 120 Hz down to 60 Hz, and the
-    // pointer is redrawn at that rate with it. A trail is what makes that drop
-    // obvious - drawn at the lowered rate it steps visibly instead of smoothing
-    // the pointer - and drawing it also forces whatever is underneath to be
-    // composited instead of scanned out (DESIGN.md 6.3), so it stays off while
-    // that holds. kwin puts the answer on the frame being prepared, so read it
-    // from there.
     const bool vrrActive = data.frame && (data.frame->presentationMode() == PresentationMode::AdaptiveSync
                                           || data.frame->presentationMode() == PresentationMode::AdaptiveAsync);
     if (vrrActive != frame.vrrActive) {
@@ -256,43 +333,35 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
                                      : "trail on: adaptive sync is not in force");
     }
 
-    // Only take samples out of the ring when they can actually be drawn. If the
-    // cursor image is momentarily unavailable, the samples stay buffered and
-    // are picked up by the next frame instead of being dropped silently.
+    const Trail::TimeUs frameIntervalUs = frameIntervalFromView(data.view);
     const bool drawable = canDraw();
 
     if (vrrActive) {
-        // Drop the samples rather than holding on to them: the window they
-        // cover is the whole time the trail was off, and collecting it on the
-        // way out would flash a smear of positions the pointer passed through
-        // long ago.
         frame.samples.clear();
         frame.ring.reset();
     } else if (drawable) {
-        // Samples newer than the last frame that was actually drawn. The anchor
-        // is the newest sample drawn so far, so a frame that could not draw does
-        // not shift the window forward and lose its samples.
         Trail::TimeUs since = frame.lastCollect;
         if (since == 0) {
-            since = now > kDefaultFrameIntervalUs ? now - kDefaultFrameIntervalUs : 0;
+            since = now > frameIntervalUs ? now - frameIntervalUs : 0;
         }
 
-        // Snapshot once per frame: painting then uses exactly the set whose area
-        // was added to the damage region, so nothing is drawn outside the
-        // damaged area and nothing needs to be redrawn later.
         frame.samples.resize(std::size_t(m_maxSamples));
         const std::size_t count = frame.ring.collect(since, frame.samples.data(), std::size_t(m_maxSamples));
         frame.samples.resize(count);
 
-        // The window continues from the newest sample that was actually drawn,
-        // not from the wall clock. Samples carry input event timestamps, and an
-        // event that happened before this frame started is handed to us only
-        // after the collect above; anchoring on `now` put such a sample behind
-        // the next window start, so it was dropped - one per frame in the steady
-        // state. Samples arrive in order, so everything arriving later is newer
-        // than what is drawn here.
         if (!frame.samples.empty()) {
             frame.lastCollect = std::max(frame.lastCollect, frame.samples.back().time);
+
+            // Drop only samples that sit at the exact same position as the
+            // already-drawn real cursor, and samples outside this output's
+            // logical bounds. All intermediate motion samples are kept raw.
+            const Rect screenGeometry = data.screen->geometry();
+            std::erase_if(frame.samples, [&](const Trail::Sample &sample) {
+                if (frame.hasHead && isSameLogicalPoint(sample, frame.headPos)) {
+                    return true;
+                }
+                return !screenGeometry.intersects(toIntRect(Trail::cursorRect(sample, frame.cursorShape)));
+            });
         }
     } else {
         frame.samples.clear();
@@ -310,18 +379,6 @@ void TrailEffect::prePaintScreen(ScreenPrePaintData &data)
         data.paint += damage;
     }
 
-    // Decide whether the frame that is being prepared for this output has to be
-    // composited. KWin asks blocksDirectScanout() for this output immediately
-    // after this pass, so the answer can be exact instead of a wall-clock
-    // estimate: only the frame that draws a trail and the frame that erases it
-    // again need the scene. frame.previousDamage describes the last frame that
-    // was really painted, so a trail that is still on screen keeps the block in
-    // place until it has been erased, even when the erasing frame is delayed.
-    //
-    // A time window after the last sample was easier, but it kept a fullscreen
-    // window off its own plane for frames that draw nothing - the compositor
-    // then has to composite the whole window, and for a video on a plane that
-    // is the difference between a page flip and a full-screen conversion.
     m_scanoutBlockOutput = (!frame.damage.isEmpty() || !frame.previousDamage.isEmpty()) ? data.screen : nullptr;
 
     effects->prePaintScreen(data);
@@ -333,45 +390,34 @@ bool TrailEffect::paintScreen(const RenderTarget &renderTarget,
                               const Region &deviceRegion,
                               LogicalOutput *screen)
 {
-    // Paint everything below the effect first, then draw on top of it. Since
-    // KWin 6.8 the call reports whether the scene was painted at all; a failure
-    // (e.g. a GPU reset) has to abort the whole pass, so the trail must not be
-    // drawn into a target the scene did not reach.
     const bool painted = effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen);
     if (!painted) {
         return false;
     }
 
-    // Capture passes have already delegated above and stop here: the trail must
-    // not be drawn into a capture target, both because the state below belongs
-    // to the output and because the capture's damage is tracked by its own
-    // source. See prePaintScreen().
     if (!isOutputRenderPass(screen)) {
         return true;
     }
 
-    const auto it = m_frames.find(screen);
-    if (it == m_frames.end()) {
+    OutputFrameState *framePtr = findFrame(screen);
+    if (!framePtr) {
         return true;
     }
-    OutputFrameState &frame = it->second;
+    OutputFrameState &frame = *framePtr;
 
     // The next frame has to repaint exactly the area painted now.
-    frame.previousDamage = frame.damage;
+    const Region currentDamage = frame.damage;
+    frame.previousDamage = currentDamage;
+    frame.damage = Region();
 
     if (!m_enabled || !effects->isOpenGLCompositing() || frame.samples.empty()) {
         return true;
     }
 
-    // prePaintScreen() refreshed the cursor image before computing the damage
-    // and only collected samples when they can be drawn, so the geometry here is
-    // the same one the damage was computed from.
-    if (!m_cursorTexture || !frame.cursorShape.isValid()) {
+    if (!m_activeCursorTexture || !frame.cursorShape.isValid()) {
         return true;
     }
 
-    // Samples are in logical coordinates; the projection matrix maps device
-    // pixels, so scale before drawing.
     const double scale = viewport.scale();
     const QSizeF deviceSize = frame.cursorShape.size * scale;
     if (deviceSize.isEmpty()) {
@@ -380,7 +426,7 @@ bool TrailEffect::paintScreen(const RenderTarget &renderTarget,
     const QPointF deviceHotspot = frame.cursorShape.hotspot * scale;
     const QMatrix4x4 projection = viewport.projectionMatrix();
 
-    selfCheckBefore(frame.damage, scale, renderTarget.size());
+    selfCheckBefore(currentDamage, scale, renderTarget.size());
 
     const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
     GLint previousSource = GL_ONE;
@@ -389,31 +435,81 @@ bool TrailEffect::paintScreen(const RenderTarget &renderTarget,
     glGetIntegerv(GL_BLEND_DST_RGB, &previousDestination);
 
     glEnable(GL_BLEND);
-    // Cursor images are uploaded as premultiplied ARGB, so premultiplied
-    // blending is required; this matches KWin's own texture rendering.
+    // Cursor textures are premultiplied RGBA, matching KWin's scene renderer.
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    {
-        // The cursor image is display-referred sRGB -- the same description
-        // KWin's own ImageItem gives the real pointer -- so it has to go through
-        // the scene's color pipeline before it lands in the render target. The
-        // target's color description carries the display brightness (software
-        // brightness and dimming), the night light adjustment and the SDR to HDR
-        // mapping. Uploading the texture and drawing it unmodified wrote raw sRGB
-        // into the target, which left the trail at full brightness while the rest
-        // of the screen was dimmed and made it too dark on an HDR output.
-        ShaderBinder shader(ShaderTrait::MapTexture | ShaderTrait::TransformColorspace);
-        shader.shader()->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
-        for (const Trail::Sample &sample : frame.samples) {
-            // One draw call per sample against a shared, cached vertex buffer.
-            // Samples are ordered oldest first, so the newest cursor ends up on
-            // top, right behind the real pointer.
-            QMatrix4x4 mvp = projection;
-            mvp.translate(float(sample.x * scale - deviceHotspot.x()),
-                          float(sample.y * scale - deviceHotspot.y()));
-            shader.shader()->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, mvp);
-            m_cursorTexture->render(Region::infinite(), deviceSize, false);
+    if (ensureTrailShader()) {
+        const QMatrix4x4 texMatrix = m_activeCursorTexture->matrix(NormalizedCoordinates);
+        const QVector2D uvTL = (texMatrix * QVector4D(0.0f, 0.0f, 0.0f, 1.0f)).toVector2D();
+        const QVector2D uvTR = (texMatrix * QVector4D(1.0f, 0.0f, 0.0f, 1.0f)).toVector2D();
+        const QVector2D uvBR = (texMatrix * QVector4D(1.0f, 1.0f, 0.0f, 1.0f)).toVector2D();
+        const QVector2D uvBL = (texMatrix * QVector4D(0.0f, 1.0f, 0.0f, 1.0f)).toVector2D();
+
+        const float width = float(deviceSize.width());
+        const float height = float(deviceSize.height());
+
+        const std::size_t sampleCount = frame.samples.size();
+        // When the real cursor is visible it occupies k = 0 (opacity 1.0), so
+        // the trail samples ordered newest-to-oldest take k = 1 .. n - 1.
+        const std::size_t headOffset = frame.hasHead ? 1 : 0;
+        const std::size_t totalCursors = sampleCount + headOffset;
+
+        m_vertices3D.clear();
+        m_vertices3D.reserve(sampleCount * 6);
+        for (std::size_t i = 0; i < sampleCount; ++i) {
+            const Trail::Sample &sample = frame.samples[i];
+            const std::size_t k = (sampleCount - 1 - i) + headOffset;
+            const float x0 = float(sample.x * scale - deviceHotspot.x());
+            const float y0 = float(sample.y * scale - deviceHotspot.y());
+            const float x1 = x0 + width;
+            const float y1 = y0 + height;
+            const float alpha = Trail::fractalSampleOpacity(k, totalCursors, m_fade);
+
+            const GLVertex3D tl{QVector3D(x0, y0, alpha), uvTL};
+            const GLVertex3D tr{QVector3D(x1, y0, alpha), uvTR};
+            const GLVertex3D br{QVector3D(x1, y1, alpha), uvBR};
+            const GLVertex3D bl{QVector3D(x0, y1, alpha), uvBL};
+
+            m_vertices3D.push_back(tl);
+            m_vertices3D.push_back(tr);
+            m_vertices3D.push_back(br);
+            m_vertices3D.push_back(tl);
+            m_vertices3D.push_back(br);
+            m_vertices3D.push_back(bl);
         }
+
+        ShaderBinder shader(m_trailShader.get());
+        m_trailShader->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, projection);
+        m_trailShader->setUniform(GLShader::IntUniform::Sampler, 0);
+        m_trailShader->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
+
+        if (m_locTextureMatrix >= 0) {
+            m_trailShader->setUniform(m_locTextureMatrix, texMatrix);
+        }
+        const bool maskCursor = frame.hasHead && width > 0.0f && height > 0.0f;
+        if (m_locMaskCursor >= 0) {
+            m_trailShader->setUniform(m_locMaskCursor, maskCursor ? 1 : 0);
+        }
+        if (maskCursor) {
+            const QVector2D headOrigin(float(frame.headPos.x() * scale - deviceHotspot.x()),
+                                       float(frame.headPos.y() * scale - deviceHotspot.y()));
+            const QVector2D invSize(1.0f / width, 1.0f / height);
+            if (m_locCursorOrigin >= 0) {
+                m_trailShader->setUniform(m_locCursorOrigin, headOrigin);
+            }
+            if (m_locCursorInvSize >= 0) {
+                m_trailShader->setUniform(m_locCursorInvSize, invSize);
+            }
+        }
+
+        m_activeCursorTexture->bind();
+        GLVertexBuffer *vbo = GLVertexBuffer::streamingBuffer();
+        vbo->reset();
+        vbo->setVertices(m_vertices3D);
+        vbo->render(GL_TRIANGLES);
+        m_activeCursorTexture->unbind();
+    } else {
+        paintFallback(renderTarget, projection, frame, scale, deviceSize, deviceHotspot);
     }
 
     glBlendFunc(previousSource, previousDestination);
@@ -421,20 +517,188 @@ bool TrailEffect::paintScreen(const RenderTarget &renderTarget,
         glDisable(GL_BLEND);
     }
 
-    // The trail sits on top of the scene, so it disappears only when a later
-    // frame repaints the region it was drawn into. While the pointer moves,
-    // every motion event schedules such a frame anyway. Once it stops, nothing
-    // else produces damage, and the last copy -- which lies on the real pointer
-    // and already overdraws it once -- would stay on screen as a bright edge
-    // until something unrelated repaints that area. Ask for that frame here:
-    // the next paint collects no samples, repaints frame.previousDamage and
-    // stops, because this request is only made when a trail was really drawn.
-    if (!frame.damage.isEmpty()) {
-        effects->addRepaint(frame.damage);
+    // Schedule the single erasing frame so the trail disappears as soon as the
+    // pointer comes to rest.
+    if (!currentDamage.isEmpty()) {
+        effects->addRepaint(currentDamage);
     }
 
     selfCheckAfter();
     reportFrameStats(frame.samples.size());
+    return true;
+}
+
+void TrailEffect::postPaintScreen()
+{
+    // If direct scanout bypassed paintScreen() for this output pass, drop the
+    // unrendered per-frame damage so isActive() does not stay stuck true.
+    if (m_currentScreen) {
+        if (OutputFrameState *frame = findFrame(m_currentScreen)) {
+            frame->damage = Region();
+            frame->samples.clear();
+        }
+        m_currentScreen = nullptr;
+    }
+    effects->postPaintScreen();
+}
+
+void TrailEffect::paintFallback(const RenderTarget &renderTarget,
+                                const QMatrix4x4 &projection,
+                                const OutputFrameState &frame,
+                                double scale,
+                                const QSizeF &deviceSize,
+                                const QPointF &deviceHotspot)
+{
+    if (!m_fade.enabled) {
+        // Single batched draw call using KWin's built-in shader.
+        const QMatrix4x4 texMatrix = m_activeCursorTexture->matrix(NormalizedCoordinates);
+        const QVector2D uvTL = (texMatrix * QVector4D(0.0f, 0.0f, 0.0f, 1.0f)).toVector2D();
+        const QVector2D uvTR = (texMatrix * QVector4D(1.0f, 0.0f, 0.0f, 1.0f)).toVector2D();
+        const QVector2D uvBR = (texMatrix * QVector4D(1.0f, 1.0f, 0.0f, 1.0f)).toVector2D();
+        const QVector2D uvBL = (texMatrix * QVector4D(0.0f, 1.0f, 0.0f, 1.0f)).toVector2D();
+
+        const float width = float(deviceSize.width());
+        const float height = float(deviceSize.height());
+
+        m_vertices2D.clear();
+        m_vertices2D.reserve(frame.samples.size() * 6);
+        for (const Trail::Sample &sample : frame.samples) {
+            const float x0 = float(sample.x * scale - deviceHotspot.x());
+            const float y0 = float(sample.y * scale - deviceHotspot.y());
+            const float x1 = x0 + width;
+            const float y1 = y0 + height;
+
+            const GLVertex2D tl{QVector2D(x0, y0), uvTL};
+            const GLVertex2D tr{QVector2D(x1, y0), uvTR};
+            const GLVertex2D br{QVector2D(x1, y1), uvBR};
+            const GLVertex2D bl{QVector2D(x0, y1), uvBL};
+
+            m_vertices2D.push_back(tl);
+            m_vertices2D.push_back(tr);
+            m_vertices2D.push_back(br);
+            m_vertices2D.push_back(tl);
+            m_vertices2D.push_back(br);
+            m_vertices2D.push_back(bl);
+        }
+
+        ShaderBinder shader(ShaderTrait::MapTexture | ShaderTrait::TransformColorspace);
+        shader.shader()->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, projection);
+        shader.shader()->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
+
+        m_activeCursorTexture->bind();
+        GLVertexBuffer *vbo = GLVertexBuffer::streamingBuffer();
+        vbo->reset();
+        vbo->setVertices(m_vertices2D);
+        vbo->render(GL_TRIANGLES);
+        m_activeCursorTexture->unbind();
+        return;
+    }
+
+    ShaderBinder shader(ShaderTrait::MapTexture | ShaderTrait::Modulate | ShaderTrait::TransformColorspace);
+    shader.shader()->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
+    const std::size_t sampleCount = frame.samples.size();
+    const std::size_t headOffset = frame.hasHead ? 1 : 0;
+    const std::size_t totalCursors = sampleCount + headOffset;
+    for (std::size_t i = 0; i < sampleCount; ++i) {
+        const Trail::Sample &sample = frame.samples[i];
+        const std::size_t k = (sampleCount - 1 - i) + headOffset;
+        const float alpha = Trail::fractalSampleOpacity(k, totalCursors, m_fade);
+        QMatrix4x4 mvp = projection;
+        mvp.translate(float(sample.x * scale - deviceHotspot.x()),
+                      float(sample.y * scale - deviceHotspot.y()));
+        shader.shader()->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, mvp);
+        shader.shader()->setUniform(GLShader::Vec4Uniform::ModulationConstant, QVector4D(alpha, alpha, alpha, alpha));
+        m_activeCursorTexture->render(Region::infinite(), deviceSize, false);
+    }
+}
+
+bool TrailEffect::ensureTrailShader()
+{
+    if (m_trailShader) {
+        return true;
+    }
+    if (m_trailShaderAttempted) {
+        return false;
+    }
+    m_trailShaderAttempted = true;
+
+    const EglContext *ctx = EglContext::currentContext();
+    const bool isGLES = ctx && ctx->openglVersionString().startsWith("OpenGL ES");
+
+    const QByteArray header = isGLES
+        ? QByteArrayLiteral("#version 300 es\nprecision highp float;\n")
+        : QByteArrayLiteral("#version 140\n");
+
+    const QByteArray vertexSource = header + QByteArrayLiteral(R"(
+in vec3 position;
+in vec2 texcoord;
+
+uniform mat4 modelViewProjectionMatrix;
+
+out vec2 texcoord0;
+out vec2 v_devicePos;
+out float v_alpha;
+
+void main()
+{
+    texcoord0 = texcoord;
+    v_devicePos = position.xy;
+    v_alpha = position.z;
+    gl_Position = modelViewProjectionMatrix * vec4(position.xy, 0.0, 1.0);
+}
+)");
+
+    const QByteArray fragmentSource = header + QByteArrayLiteral(R"(
+#include "colormanagement.glsl"
+
+uniform sampler2D sampler;
+uniform mat4 u_textureMatrix;
+uniform vec2 u_cursorOrigin;
+uniform vec2 u_cursorInvSize;
+uniform int u_maskCursor;
+
+in vec2 texcoord0;
+in vec2 v_devicePos;
+in float v_alpha;
+
+out vec4 fragColor;
+
+void main()
+{
+    vec4 color = texture(sampler, texcoord0);
+    if (color.a <= 0.0) {
+        discard;
+    }
+
+    float mask = v_alpha;
+    if (u_maskCursor != 0) {
+        vec2 headUv = (v_devicePos - u_cursorOrigin) * u_cursorInvSize;
+        if (headUv.x >= 0.0 && headUv.x <= 1.0 && headUv.y >= 0.0 && headUv.y <= 1.0) {
+            vec2 mappedHeadUv = (u_textureMatrix * vec4(headUv, 0.0, 1.0)).xy;
+            mask *= (1.0 - texture(sampler, mappedHeadUv).a);
+        }
+    }
+    if (mask <= 0.0) {
+        discard;
+    }
+
+    color = sourceEncodingToNitsInDestinationColorspace(color);
+    color = nitsToDestinationEncoding(color);
+    fragColor = color * mask;
+}
+)");
+
+    m_trailShader = ShaderManager::instance()->loadShaderFromCode(vertexSource, fragmentSource);
+    if (!m_trailShader) {
+        qCWarning(TRAIL) << "failed to compile custom batched trail shader; falling back to built-in KWin shader";
+        return false;
+    }
+
+    m_locTextureMatrix = m_trailShader->uniformLocation("u_textureMatrix");
+    m_locCursorOrigin = m_trailShader->uniformLocation("u_cursorOrigin");
+    m_locCursorInvSize = m_trailShader->uniformLocation("u_cursorInvSize");
+    m_locMaskCursor = m_trailShader->uniformLocation("u_maskCursor");
+    qCDebug(TRAIL) << "compiled custom batched trail shader (GLES:" << isGLES << ")";
     return true;
 }
 
@@ -445,9 +709,6 @@ void TrailEffect::selfCheckBefore(const Region &logicalDamage, double scale, con
         return;
     }
 
-    // The damage region is in logical coordinates, the framebuffer in device
-    // pixels. Only a bounded area is read back, because glReadPixels stalls the
-    // pipeline; this runs in diagnosis mode only.
     const QRectF logical = QRectF(logicalDamage.boundingRect());
     const QRect rect = QRectF(logical.topLeft() * scale, logical.size() * scale).toAlignedRect()
         & QRect(QPoint(), targetSize);
@@ -502,66 +763,198 @@ void TrailEffect::selfCheckAfter()
     }
 }
 
-bool TrailEffect::cursorGeometryChanged() const
+bool TrailEffect::cursorGeometryChanged(double targetScale) const
 {
-    // Cursor::rect() is the source size without the pointer position, so
-    // comparing it against what the cached image was built from is stable across
-    // frames -- unlike geometry(), which translates the rectangle by the ever
-    // changing pointer position and could therefore differ in the last bit.
     const Cursor *cursor = Cursors::self()->currentCursor();
     if (!cursor) {
         return true;
     }
-    return cursor->source() != m_cursorImageState.source
+    const CursorSource *source = cursor->source();
+    if (source != m_cursorImageState.source
         || cursor->rect().size() != m_cursorImageState.size
-        || cursor->hotspot() != m_cursorImageState.hotspot;
+        || cursor->hotspot() != m_cursorImageState.hotspot) {
+        return true;
+    }
+    if (qobject_cast<const SurfaceCursorSource *>(source)
+        && std::abs(targetScale - m_cursorImageState.surfaceScale) > 1e-3) {
+        return true;
+    }
+    return false;
 }
 
-void TrailEffect::refreshCursorShape()
+GLTexture *TrailEffect::getOrUploadCachedTexture(const QImage &image)
+{
+    const qint64 key = qint64(image.cacheKey());
+    const QSize size = image.size();
+
+    for (auto it = m_textureCache.begin(); it != m_textureCache.end(); ++it) {
+        if (it->key == key && it->size == size) {
+            if (std::next(it) != m_textureCache.end()) {
+                std::rotate(it, std::next(it), m_textureCache.end());
+            }
+            return m_textureCache.back().texture.get();
+        }
+    }
+
+    std::unique_ptr<GLTexture> texture = GLTexture::upload(image);
+    if (!texture) {
+        return nullptr;
+    }
+    texture->setFilter(GL_LINEAR);
+    texture->setWrapMode(GL_CLAMP_TO_EDGE);
+
+    if (m_textureCache.size() >= kMaxCachedTextures) {
+        m_textureCache.erase(m_textureCache.begin());
+    }
+    GLTexture *raw = texture.get();
+    m_textureCache.push_back(CachedTexture{
+        .key = key,
+        .size = size,
+        .texture = std::move(texture),
+    });
+    qCDebug(TRAIL) << "cursor image uploaded to cache (" << m_textureCache.size() << "entries):"
+                   << image.size() << "hotspot" << m_cursorShape.hotspot;
+    return raw;
+}
+
+bool TrailEffect::renderCursorItemToTexture(const Cursor *cursor, RenderView *view, double scale)
+{
+    if (!cursor || !view) {
+        return false;
+    }
+    WorkspaceScene *scene = effects->scene();
+    Item *cursorItem = scene ? scene->cursorItem() : nullptr;
+    ItemRenderer *renderer = (scene && view->renderDevice()) ? scene->renderer(view->renderDevice()) : nullptr;
+    if (!cursorItem || !renderer || !cursorItem->isVisible()) {
+        return false;
+    }
+
+    const RectF localBounds = cursorItem->boundingRect();
+    if (localBounds.isEmpty()) {
+        return false;
+    }
+    const RectF sceneBounds = cursorItem->mapToScene(localBounds);
+    const QSize pixelSize(std::max(1, int(std::ceil(sceneBounds.width() * scale))),
+                          std::max(1, int(std::ceil(sceneBounds.height() * scale))));
+    if (pixelSize.width() > kMaxSurfaceCursorSize || pixelSize.height() > kMaxSurfaceCursorSize) {
+        return false;
+    }
+
+    if (!m_surfaceCursorTexture || m_surfaceCursorTexture->size() != pixelSize || !m_surfaceCursorFbo || !m_surfaceCursorFbo->valid()) {
+        m_surfaceCursorFbo.reset();
+        m_surfaceCursorTexture = GLTexture::allocate(GL_RGBA8, pixelSize);
+        if (!m_surfaceCursorTexture) {
+            return false;
+        }
+        m_surfaceCursorTexture->setFilter(GL_LINEAR);
+        m_surfaceCursorTexture->setWrapMode(GL_CLAMP_TO_EDGE);
+        m_surfaceCursorFbo = std::make_unique<GLFramebuffer>(m_surfaceCursorTexture.get());
+        if (!m_surfaceCursorFbo->valid()) {
+            m_surfaceCursorFbo.reset();
+            m_surfaceCursorTexture.reset();
+            return false;
+        }
+        qCDebug(TRAIL) << "allocated GPU FBO for surface cursor:" << pixelSize << "scale" << scale;
+    }
+
+    // Use a logical renderRect matching pixelSize/scale so the rendered FBO
+    // maps 1:1 with no fractional stretching when drawn.
+    const QSizeF logicalSize(double(pixelSize.width()) / scale, double(pixelSize.height()) / scale);
+    const RectF renderRect(sceneBounds.topLeft(), logicalSize);
+    const RenderTarget target(m_surfaceCursorFbo.get(), ColorDescription::sRGB);
+    const RenderViewport targetViewport(renderRect, scale, target, QPoint());
+
+    const GLboolean scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    if (scissorWasEnabled) {
+        glDisable(GL_SCISSOR_TEST);
+    }
+
+    GLFramebuffer::pushFramebuffer(m_surfaceCursorFbo.get());
+    renderer->beginFrame(target, targetViewport);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    const bool ok = renderer->renderItem(target, targetViewport, cursorItem, 0, Region::infinite(), WindowPaintData(), {}, {});
+    renderer->endFrame();
+    GLFramebuffer::popFramebuffer();
+
+    if (scissorWasEnabled) {
+        glEnable(GL_SCISSOR_TEST);
+    }
+
+    if (!ok) {
+        return false;
+    }
+
+    m_cursorShape.size = logicalSize;
+    m_cursorShape.hotspot = cursorItem->position() - sceneBounds.topLeft();
+    m_activeCursorTexture = m_surfaceCursorTexture.get();
+    return true;
+}
+
+void TrailEffect::refreshCursorShape(RenderView *view, double targetScale)
 {
     const Cursor *cursor = Cursors::self()->currentCursor();
+    const CursorSource *source = cursor ? cursor->source() : nullptr;
     m_cursorImageState = CursorImageState{
-        .source = cursor ? cursor->source() : nullptr,
+        .source = source,
         .size = cursor ? cursor->rect().size() : QSizeF(),
         .hotspot = cursor ? cursor->hotspot() : QPointF(),
+        .surfaceScale = targetScale,
     };
 
+    if (!cursor || !source || source->isBlank()) {
+        m_activeCursorTexture = nullptr;
+        m_cursorShape = Trail::CursorShape();
+        return;
+    }
+
+    // Fast path 1: theme/shape cursors already have a CPU QImage in memory;
+    // reuse uploaded GLTextures via LRU cache with zero GPU readback.
+    if (const auto *shapeSource = qobject_cast<const ShapeCursorSource *>(source)) {
+        const QImage image = shapeSource->image();
+        if (image.isNull()) {
+            m_activeCursorTexture = nullptr;
+            m_cursorShape = Trail::CursorShape();
+            return;
+        }
+        const qreal dpr = image.devicePixelRatio() > 0.0 ? image.devicePixelRatio() : 1.0;
+        m_cursorShape.size = QSizeF(image.size()) / dpr;
+        m_cursorShape.hotspot = shapeSource->hotspot();
+        m_activeCursorTexture = getOrUploadCachedTexture(image);
+        return;
+    }
+
+    // Fast path 2: Wayland client surface cursors render straight into a
+    // reusable GPU FBO texture, avoiding effects->cursorImage()'s glReadPixels
+    // pipeline stall and CPU->GPU re-upload.
+    if (qobject_cast<const SurfaceCursorSource *>(source)) {
+        if (renderCursorItemToTexture(cursor, view, targetScale)) {
+            return;
+        }
+    }
+
+    // Fallback: grab via KWin's platform API and cache by QImage cacheKey.
     const PlatformCursorImage cursorImage = effects->cursorImage();
     const QImage image = cursorImage.image();
     if (image.isNull()) {
-        m_cursorTexture.reset();
+        m_activeCursorTexture = nullptr;
         m_cursorShape = Trail::CursorShape();
-        m_cursorImageKey = 0;
         return;
     }
 
     const qreal dpr = image.devicePixelRatio() > 0.0 ? image.devicePixelRatio() : 1.0;
     m_cursorShape.size = QSizeF(image.size()) / dpr;
     m_cursorShape.hotspot = cursorImage.hotSpot();
-
-    // Uploading is only needed when the pointer image actually changed, e.g.
-    // when moving from a window to a text field or when an animated cursor
-    // advances to its next sprite.
-    if (!m_cursorTexture || m_cursorImageKey != qint64(image.cacheKey())) {
-        m_cursorTexture = GLTexture::upload(image);
-        m_cursorImageKey = qint64(image.cacheKey());
-        qCDebug(TRAIL) << "cursor image uploaded:" << image.size() << "hotspot" << m_cursorShape.hotspot;
-    }
+    m_activeCursorTexture = getOrUploadCachedTexture(image);
 }
 
 bool TrailEffect::canDraw() const
 {
-    return m_enabled && m_cursorTexture && m_cursorShape.isValid();
+    return m_enabled && m_activeCursorTexture && m_cursorShape.isValid();
 }
 
 bool TrailEffect::isOutputRenderPass(LogicalOutput *screen) const
 {
-    // The output's own view is the one built around a backend output;
-    // every capture view (screencast, screenshot, color picker, the
-    // scene-rendering part of the screen transform effect) passes nullptr
-    // there, so it never compares equal to screen->backendOutput(). This is the
-    // same test KWin's ScreenTransformEffect uses to keep its offscreen capture
-    // pass out of its own painting.
     if (!m_currentView || !screen) {
         return false;
     }
@@ -569,28 +962,30 @@ bool TrailEffect::isOutputRenderPass(LogicalOutput *screen) const
     return viewOutput && viewOutput == screen->backendOutput();
 }
 
+bool TrailEffect::isActive() const
+{
+    if (!m_enabled) {
+        return false;
+    }
+    for (const OutputEntry &entry : m_frames) {
+        const OutputFrameState &frame = *entry.state;
+        if (!frame.ring.empty() || !frame.previousDamage.isEmpty() || !frame.damage.isEmpty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool TrailEffect::blocksDirectScanout() const
 {
-    // While a trail is on screen the frame cannot be a direct scanout of a
-    // single window: KWin has no way to blend composited content over a DRM
-    // plane, so a fullscreen window has to be pulled off its own plane and
-    // composited together with the trail. prePaintScreen() records the output
-    // whose last pass needed that, and KWin asks this question for one output
-    // right after that output's prePaintScreen(), so the answer describes
-    // exactly the frame being prepared.
-    //
-    // Reporting false for every frame that neither draws nor erases a trail is
-    // the point: an idle pointer - and with it a fullscreen video that would
-    // otherwise stay on its own plane - must not be composited for nothing.
-    return m_enabled && m_scanoutBlockOutput;
+    return m_enabled && m_blockDirectScanout && m_scanoutBlockOutput;
 }
 
 int TrailEffect::requestedEffectChainPosition() const
 {
     // Effects are called in ascending position and each one paints after
-    // delegating with effects->paintScreen(), so the first effect in the chain
-    // is drawn last. Position 0 therefore puts the trail on top of the windows,
-    // which is what KWin's own pointer overlay effects do.
+    // delegating with effects->paintScreen(), so position 0 draws last (on top
+    // of windows), matching KWin's own pointer overlay effects.
     return 0;
 }
 
@@ -609,9 +1004,8 @@ void TrailEffect::reportFrameStats(std::size_t cursorCount)
     }
 
     std::uint64_t dropped = 0;
-    for (const auto &[screen, frame] : m_frames) {
-        Q_UNUSED(screen)
-        dropped += frame.ring.droppedSamples();
+    for (const OutputEntry &entry : m_frames) {
+        dropped += entry.state->ring.droppedSamples();
     }
 
     const double seconds = double(now - m_statsSince) / 1'000'000.0;

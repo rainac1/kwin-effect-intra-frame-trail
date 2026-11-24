@@ -147,11 +147,16 @@ trailEnabled=true
 Enabled=true
 MaxSamples=256
 SampleStride=1
+BlockDirectScanout=false
+Fade=true
+FadeBase=1.2446
 ```
 
 The trail is always exactly one frame long: the effect draws every sample the pointer produced since the previous frame.
 - `MaxSamples` caps how many cursors are drawn per frame.
 - `SampleStride` keeps one out of every `N` samples and drops the rest before they are buffered, so the drawn cursors end up `N` times further apart while the trail still covers that same frame (`1` keeps every sample).
+- `BlockDirectScanout` (`false` by default) keeps KWin's hardware cursor plane and fullscreen direct scanout intact on normal composited desktops; set to `true` to pull fullscreen direct-scanout windows back into compositing so the trail can draw over them.
+- `Fade` (`true` by default) enables a dyadic fractal opacity sequence across the frame's `n` cursors (numbered `0` to `n - 1` from newest to oldest): cursor `0` is opaque (`1.0`), and with `m = floor(log2(n - 1)) + 1` and `v = ctz(k)` (`2^v = lowbit(k)`), cursor `k` (`1 <= k <= n - 1`) is drawn at opacity `pow(FadeBase, v - m)` (`lowbit(k) / 2^m` when `FadeBase=2.0`, defaulting to `1.2446` so deeper fractal levels stay visible at high polling rates). Setting `Fade=false` or `FadeBase=1.0` draws every copy at full opacity.
 
 KWin re-reads the `[Effect-trail]` settings when `kwinrc` changes; the `[Plugins] trailEnabled` switch is only read at session start (see [docs/USAGE.md](docs/USAGE.md)).
 

@@ -93,10 +93,14 @@ That live call requires the running KWin to have the plugin on Qt's plugin path.
 | `Enabled` | `true` | Runtime switch; does not unload the plugin |
 | `MaxSamples` | `256` | Per-frame draw budget |
 | `SampleStride` | `1` | Keep one out of every `N` samples |
+| `BlockDirectScanout` | `false` | Force compositing over fullscreen direct-scanout windows (also disables hardware cursor plane while active) |
+| `Fade` | `true` | Enable dyadic fractal opacity (`pow(FadeBase, ctz(k) - m)`) |
+| `FadeBase` | `1.2446` | Floating-point base `b` (`>= 1.0`) for the fractal opacity levels (`2.0` gives `lowbit(k) / 2^m`; `1.0` is full opacity) |
 
 ```bash
 kwriteconfig6 --file kwinrc --group Effect-trail --key MaxSamples 128
 kwriteconfig6 --file kwinrc --group Effect-trail --key SampleStride 4
+kwriteconfig6 --file kwinrc --group Effect-trail --key FadeBase 1.5
 ```
 
 If a change does not take effect immediately:

@@ -72,6 +72,12 @@ public:
     /** Discard all buffered samples. */
     void reset() noexcept;
 
+    /** True when no unconsumed samples are waiting in the ring. */
+    bool empty() const noexcept
+    {
+        return m_write.load(std::memory_order_acquire) == m_read.load(std::memory_order_relaxed);
+    }
+
     std::size_t capacity() const noexcept
     {
         return m_data.size();
@@ -104,6 +110,27 @@ struct CursorShape
         return size.width() > 0.0 && size.height() > 0.0;
     }
 };
+
+/**
+ * Parameters for the dyadic fractal opacity sequence.
+ *
+ * Cursors in a frame are numbered k = 0 .. n - 1 from newest to oldest.
+ * Cursor 0 is rendered opaque (1.0). For k >= 1, with m = floor(log2(n - 1)) + 1
+ * (so 2^(m-1) <= n - 1 < 2^m) and v = ctz(k) (so 2^v = lowbit(k)), cursor k
+ * is rendered with opacity pow(base, v) / pow(base, m) = pow(base, v - m).
+ * For base == 2.0 this reduces to lowbit(k) / 2^m.
+ */
+struct FractalOpacityConfig
+{
+    bool enabled = true;
+    double base = 1.2446;
+};
+
+/**
+ * Opacity for cursor index @p k (0 = newest, n - 1 = oldest) in a frame with
+ * @p totalCount (= n) cursors. Returns 1.0 when disabled or @p k == 0.
+ */
+float fractalSampleOpacity(std::size_t k, std::size_t totalCount, const FractalOpacityConfig &config) noexcept;
 
 /**
  * Rectangle covered by the cursor image drawn for @p sample.

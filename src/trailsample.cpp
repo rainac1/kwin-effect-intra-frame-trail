@@ -1,6 +1,8 @@
 #include "trailsample.h"
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
 
 namespace Trail
 {
@@ -75,6 +77,19 @@ void SampleRing::reset() noexcept
 {
     m_read.store(m_write.load(std::memory_order_acquire), std::memory_order_release);
     m_dropped = 0;
+}
+
+float fractalSampleOpacity(std::size_t k, std::size_t totalCount, const FractalOpacityConfig &config) noexcept
+{
+    if (!config.enabled || k == 0 || totalCount <= 1 || config.base <= 1.0) {
+        return 1.0f;
+    }
+
+    // m = floor(log2(n - 1)) + 1, so 2^(m - 1) <= n - 1 < 2^m.
+    const int m = int(std::bit_width(totalCount - 1));
+    // v = ctz(k), so 2^v = lowbit(k).
+    const int v = std::countr_zero(k);
+    return float(std::clamp(std::pow(config.base, double(v - m)), 0.0, 1.0));
 }
 
 QRectF cursorRect(const Sample &sample, const CursorShape &shape)
