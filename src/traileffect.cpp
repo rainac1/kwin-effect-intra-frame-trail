@@ -64,9 +64,16 @@ constexpr int kDefaultMaxSamples = 256;
 constexpr int kDefaultSampleStride = 1;
 constexpr bool kDefaultBlockDirectScanout = false;
 constexpr bool kDefaultFadeEnabled = true;
-constexpr double kDefaultFadeBase = 1.2446;
+constexpr double kDefaultFadeBase = 1.618;
 constexpr double kMinFadeBase = 1.0;
 constexpr double kMaxFadeBase = 16.0;
+constexpr double kDefaultFadeOpticalDepth = 2.0;
+constexpr double kMinFadeOpticalDepth = 0.0;
+constexpr double kMaxFadeOpticalDepth = 16.0;
+constexpr bool kDefaultFadeGammaCompensation = true;
+constexpr double kDefaultFadeGamma = 2.2;
+constexpr double kMinFadeGamma = 0.1;
+constexpr double kMaxFadeGamma = 10.0;
 
 constexpr std::size_t kRingCapacity = 1024;
 constexpr std::size_t kMaxCachedTextures = 32;
@@ -111,6 +118,21 @@ bool isSameLogicalPoint(const Trail::Sample &sample, const QPointF &pos)
 {
     return std::abs(sample.x - float(pos.x())) < kHeadMatchEpsilon
         && std::abs(sample.y - float(pos.y())) < kHeadMatchEpsilon;
+}
+
+Trail::FadeMode parseFadeMode(const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized.isEmpty() || normalized == QLatin1String("geometric")) {
+        return Trail::FadeMode::Geometric;
+    }
+    if (normalized == QLatin1String("beer-lambert")
+        || normalized == QLatin1String("beerlambert")
+        || normalized == QLatin1String("beer_lambert")) {
+        return Trail::FadeMode::BeerLambert;
+    }
+    qCWarning(TRAIL) << "unknown FadeMode" << value << "; falling back to geometric";
+    return Trail::FadeMode::Geometric;
 }
 
 } // namespace
@@ -224,7 +246,13 @@ void TrailEffect::reconfigure(ReconfigureFlags flags)
     m_blockDirectScanout = config.readEntry("BlockDirectScanout", kDefaultBlockDirectScanout);
 
     m_fade.enabled = config.readEntry("Fade", kDefaultFadeEnabled);
+    m_fade.mode = parseFadeMode(config.readEntry("FadeMode", QStringLiteral("geometric")));
     m_fade.base = std::clamp(config.readEntry("FadeBase", kDefaultFadeBase), kMinFadeBase, kMaxFadeBase);
+    m_fade.opticalDepth = std::clamp(config.readEntry("FadeOpticalDepth", kDefaultFadeOpticalDepth),
+                                     kMinFadeOpticalDepth, kMaxFadeOpticalDepth);
+    m_fade.gammaCompensation = config.readEntry("FadeGammaCompensation", kDefaultFadeGammaCompensation);
+    m_fade.gamma = std::clamp(config.readEntry("FadeGamma", kDefaultFadeGamma), kMinFadeGamma, kMaxFadeGamma);
+    m_levelOpacities = Trail::buildLevelOpacities(m_fade);
 
     // Outputs that already exist must have a buffer before the first motion
     // event, otherwise the first frame after enabling would have nothing to
@@ -463,7 +491,7 @@ bool TrailEffect::paintScreen(const RenderTarget &renderTarget,
             const float y0 = float(sample.y * scale - deviceHotspot.y());
             const float x1 = x0 + width;
             const float y1 = y0 + height;
-            const float alpha = Trail::fractalSampleOpacity(k, totalCursors, m_fade);
+            const float alpha = Trail::fractalSampleOpacity(k, totalCursors, m_levelOpacities);
 
             const GLVertex3D tl{QVector3D(x0, y0, alpha), uvTL};
             const GLVertex3D tr{QVector3D(x1, y0, alpha), uvTR};
@@ -602,7 +630,7 @@ void TrailEffect::paintFallback(const RenderTarget &renderTarget,
     for (std::size_t i = 0; i < sampleCount; ++i) {
         const Trail::Sample &sample = frame.samples[i];
         const std::size_t k = (sampleCount - 1 - i) + headOffset;
-        const float alpha = Trail::fractalSampleOpacity(k, totalCursors, m_fade);
+        const float alpha = Trail::fractalSampleOpacity(k, totalCursors, m_levelOpacities);
         QMatrix4x4 mvp = projection;
         mvp.translate(float(sample.x * scale - deviceHotspot.x()),
                       float(sample.y * scale - deviceHotspot.y()));

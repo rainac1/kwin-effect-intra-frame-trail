@@ -258,8 +258,9 @@ private:
      * plane and fullscreen direct scanout.
      */
     bool m_blockDirectScanout = false;
-    /** Dyadic fractal opacity parameters. */
+    /** Width-of-zero layered opacity parameters and precomputed per-level table. */
     Trail::FractalOpacityConfig m_fade;
+    Trail::LevelOpacityTable m_levelOpacities{};
     bool m_enabled = true;
 
     // Diagnostics only.

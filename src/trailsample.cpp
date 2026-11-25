@@ -79,17 +79,73 @@ void SampleRing::reset() noexcept
     m_dropped = 0;
 }
 
-float fractalSampleOpacity(std::size_t k, std::size_t totalCount, const FractalOpacityConfig &config) noexcept
+int fractalSampleLevel(std::size_t k, std::size_t totalCount) noexcept
 {
-    if (!config.enabled || k == 0 || totalCount <= 1 || config.base <= 1.0) {
-        return 1.0f;
+    if (k == 0 || totalCount <= 1) {
+        return 0;
     }
 
     // m = floor(log2(n - 1)) + 1, so 2^(m - 1) <= n - 1 < 2^m.
     const int m = int(std::bit_width(totalCount - 1));
-    // v = ctz(k), so 2^v = lowbit(k).
+    // v = ctz(k), so 2^v = lowbit(k); level L = m - v ranges from 1 (coarsest) to m (finest).
     const int v = std::countr_zero(k);
-    return float(std::clamp(std::pow(config.base, double(v - m)), 0.0, 1.0));
+    return std::max(1, m - v);
+}
+
+double levelPerceivedBrightness(int level, const FractalOpacityConfig &config) noexcept
+{
+    if (!config.enabled || level <= 0) {
+        return 1.0;
+    }
+
+    switch (config.mode) {
+    case FadeMode::Geometric:
+        if (config.base <= 1.0) {
+            return 1.0;
+        }
+        return std::clamp(std::pow(config.base, -double(level)), 0.0, 1.0);
+    case FadeMode::BeerLambert: {
+        if (config.opticalDepth <= 0.0) {
+            return 0.0;
+        }
+        const double tau = config.opticalDepth * std::exp2(-double(level));
+        return std::clamp(1.0 - std::exp(-tau), 0.0, 1.0);
+    }
+    }
+    return 1.0;
+}
+
+double applyGammaCompensation(double brightness, const FractalOpacityConfig &config) noexcept
+{
+    const double clamped = std::clamp(brightness, 0.0, 1.0);
+    if (!config.gammaCompensation || config.gamma <= 0.0 || clamped <= 0.0 || clamped >= 1.0) {
+        return clamped;
+    }
+    return std::clamp(std::pow(clamped, 1.0 / config.gamma), 0.0, 1.0);
+}
+
+LevelOpacityTable buildLevelOpacities(const FractalOpacityConfig &config) noexcept
+{
+    LevelOpacityTable table{};
+    table[0] = 1.0f;
+    for (int level = 1; level < int(kMaxFadeLevels); ++level) {
+        const double brightness = levelPerceivedBrightness(level, config);
+        table[std::size_t(level)] = float(applyGammaCompensation(brightness, config));
+    }
+    return table;
+}
+
+float fractalSampleOpacity(std::size_t k, std::size_t totalCount, const LevelOpacityTable &levelOpacities) noexcept
+{
+    const int level = fractalSampleLevel(k, totalCount);
+    return levelOpacities[std::size_t(std::clamp(level, 0, int(kMaxFadeLevels - 1)))];
+}
+
+float fractalSampleOpacity(std::size_t k, std::size_t totalCount, const FractalOpacityConfig &config) noexcept
+{
+    const int level = fractalSampleLevel(k, totalCount);
+    const double brightness = levelPerceivedBrightness(level, config);
+    return float(applyGammaCompensation(brightness, config));
 }
 
 QRectF cursorRect(const Sample &sample, const CursorShape &shape)

@@ -94,8 +94,12 @@ That live call requires the running KWin to have the plugin on Qt's plugin path.
 | `MaxSamples` | `256` | Per-frame draw budget |
 | `SampleStride` | `1` | Keep one out of every `N` samples |
 | `BlockDirectScanout` | `false` | Force compositing over fullscreen direct-scanout windows (also disables hardware cursor plane while active) |
-| `Fade` | `true` | Enable dyadic fractal opacity (`pow(FadeBase, ctz(k) - m)`) |
-| `FadeBase` | `1.2446` | Floating-point base `b` (`>= 1.0`) for the fractal opacity levels (`2.0` gives `lowbit(k) / 2^m`; `1.0` is full opacity) |
+| `Fade` | `true` | Enable width-of-zero hierarchical opacity (`L = m - ctz(k)`) |
+| `FadeMode` | `geometric` | Attenuation curve per level: `geometric` (`pow(FadeBase, -L)`) or `beer-lambert` (`1 - exp(-FadeOpticalDepth * 2^-L)`) |
+| `FadeBase` | `1.618` | Base `b` (`>= 1.0`) for `geometric` mode (`1.0` is full opacity) |
+| `FadeOpticalDepth` | `2.0` | Reference optical thickness `τ0` (`>= 0.0`) for `beer-lambert` mode (`τ(L) = τ0 * 2^-L`) |
+| `FadeGammaCompensation` | `true` | Apply sRGB inverse-gamma compensation `pow(p, 1 / FadeGamma)` to final opacity |
+| `FadeGamma` | `2.2` | Gamma exponent (`0.1`–`10.0`) for `FadeGammaCompensation` |
 
 ```bash
 kwriteconfig6 --file kwinrc --group Effect-trail --key MaxSamples 128

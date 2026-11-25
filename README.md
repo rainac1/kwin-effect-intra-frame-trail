@@ -149,14 +149,21 @@ MaxSamples=256
 SampleStride=1
 BlockDirectScanout=false
 Fade=true
-FadeBase=1.2446
+FadeMode=geometric
+FadeBase=1.618
+FadeOpticalDepth=2.0
+FadeGammaCompensation=true
+FadeGamma=2.2
 ```
 
 The trail is always exactly one frame long: the effect draws every sample the pointer produced since the previous frame.
 - `MaxSamples` caps how many cursors are drawn per frame.
 - `SampleStride` keeps one out of every `N` samples and drops the rest before they are buffered, so the drawn cursors end up `N` times further apart while the trail still covers that same frame (`1` keeps every sample).
 - `BlockDirectScanout` (`false` by default) keeps KWin's hardware cursor plane and fullscreen direct scanout intact on normal composited desktops; set to `true` to pull fullscreen direct-scanout windows back into compositing so the trail can draw over them.
-- `Fade` (`true` by default) enables a dyadic fractal opacity sequence across the frame's `n` cursors (numbered `0` to `n - 1` from newest to oldest): cursor `0` is opaque (`1.0`), and with `m = floor(log2(n - 1)) + 1` and `v = ctz(k)` (`2^v = lowbit(k)`), cursor `k` (`1 <= k <= n - 1`) is drawn at opacity `pow(FadeBase, v - m)` (`lowbit(k) / 2^m` when `FadeBase=2.0`, defaulting to `1.2446` so deeper fractal levels stay visible at high polling rates). Setting `Fade=false` or `FadeBase=1.0` draws every copy at full opacity.
+- `Fade` (`true` by default) enables width-of-zero hierarchical opacity across the frame's `n` cursors (numbered `0` to `n - 1` from newest to oldest): cursor `0` sits at level `0` (opacity `1.0`), and with `m = floor(log2(n - 1)) + 1` and `v = ctz(k)` (`2^v = lowbit(k)`), cursor `k` (`1 <= k <= n - 1`) belongs to level `L = m - v` (`1 <= L <= m`). Each level computes a preset perceived brightness `p(L)`:
+  - `FadeMode=geometric` (default): `p(L) = pow(FadeBase, -L)`, defaulting to `FadeBase=1.618`.
+  - `FadeMode=beer-lambert`: dyadic optical thickness `τ(L) = FadeOpticalDepth * 2^-L` (`FadeOpticalDepth=2.0` by default), `p(L) = 1 - exp(-τ(L))`, so overlapping samples at the same level add optical thickness naturally.
+- `FadeGammaCompensation` (`true` by default) applies inverse-gamma compensation `pow(p(L), 1 / FadeGamma)` (`FadeGamma=2.2` by default) to the final opacity so deeper levels remain visible under sRGB blending (with `FadeBase=1.618` and `FadeGamma=2.2`, `1.618^(1/2.2) ≈ 1.2445`). Setting `Fade=false` or `FadeBase=1.0` (in geometric mode) draws every copy at full opacity.
 
 KWin re-reads the `[Effect-trail]` settings when `kwinrc` changes; the `[Plugins] trailEnabled` switch is only read at session start (see [docs/USAGE.md](docs/USAGE.md)).
 

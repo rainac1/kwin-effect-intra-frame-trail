@@ -4,6 +4,7 @@
 #include <QRectF>
 #include <QSizeF>
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -111,20 +112,74 @@ struct CursorShape
     }
 };
 
+/** Opacity attenuation curve applied to each dyadic trail level. */
+enum class FadeMode
+{
+    Geometric,
+    BeerLambert,
+};
+
 /**
- * Parameters for the dyadic fractal opacity sequence.
+ * Maximum number of hierarchy levels (0 .. 64 for 64-bit std::size_t).
+ * Level 0 is the primary cursor; levels 1..m correspond to m - ctz(k).
+ */
+inline constexpr std::size_t kMaxFadeLevels = 65;
+
+/** Precomputed opacity table indexed by hierarchy level (0 .. kMaxFadeLevels - 1). */
+using LevelOpacityTable = std::array<float, kMaxFadeLevels>;
+
+/**
+ * Parameters for width-of-zero layered trail opacity.
  *
  * Cursors in a frame are numbered k = 0 .. n - 1 from newest to oldest.
- * Cursor 0 is rendered opaque (1.0). For k >= 1, with m = floor(log2(n - 1)) + 1
- * (so 2^(m-1) <= n - 1 < 2^m) and v = ctz(k) (so 2^v = lowbit(k)), cursor k
- * is rendered with opacity pow(base, v) / pow(base, m) = pow(base, v - m).
- * For base == 2.0 this reduces to lowbit(k) / 2^m.
+ * Cursor 0 occupies level 0 (full opacity 1.0). For k >= 1, with
+ * m = floor(log2(n - 1)) + 1 = bit_width(n - 1) and v = countr_zero(k),
+ * cursor k belongs to level L = m - v in [1, m]. Each level maps to a preset
+ * perceived brightness p(L):
+ * - Geometric:   p(L) = pow(base, -L)
+ * - BeerLambert: p(L) = 1 - exp(-opticalDepth * 2^-L)
+ * When gammaCompensation is enabled, the final opacity applies inverse-gamma
+ * compensation pow(p(L), 1 / gamma) for sRGB alpha blending.
  */
 struct FractalOpacityConfig
 {
     bool enabled = true;
-    double base = 1.2446;
+    FadeMode mode = FadeMode::Geometric;
+    double base = 1.618;
+    double opticalDepth = 2.0;
+    bool gammaCompensation = true;
+    double gamma = 2.2;
 };
+
+/**
+ * Hierarchy level for cursor index @p k (0 = newest, n - 1 = oldest) in a
+ * frame with @p totalCount (= n) cursors, derived from countr_zero(k).
+ * Returns 0 for @p k == 0 or @p totalCount <= 1, otherwise m - ctz(k) in [1, m].
+ */
+int fractalSampleLevel(std::size_t k, std::size_t totalCount) noexcept;
+
+/**
+ * Preset perceived brightness in [0, 1] for hierarchy @p level (0 = full).
+ */
+double levelPerceivedBrightness(int level, const FractalOpacityConfig &config) noexcept;
+
+/**
+ * Apply sRGB inverse-gamma compensation pow(brightness, 1 / gamma) when enabled.
+ */
+double applyGammaCompensation(double brightness, const FractalOpacityConfig &config) noexcept;
+
+/**
+ * Precompute the final opacity lookup table for every hierarchy level
+ * (0 .. kMaxFadeLevels - 1) from @p config. Intended to be computed once on
+ * reconfigure rather than per frame.
+ */
+LevelOpacityTable buildLevelOpacities(const FractalOpacityConfig &config) noexcept;
+
+/**
+ * Opacity for cursor index @p k (0 = newest, n - 1 = oldest) in a frame with
+ * @p totalCount (= n) cursors using a precomputed @p levelOpacities table.
+ */
+float fractalSampleOpacity(std::size_t k, std::size_t totalCount, const LevelOpacityTable &levelOpacities) noexcept;
 
 /**
  * Opacity for cursor index @p k (0 = newest, n - 1 = oldest) in a frame with
